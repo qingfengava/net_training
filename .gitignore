@@ -1,0 +1,81 @@
+# ---- Environment and tool state --------------------------------------------
+.venv/
+venv/
+# project-local Ultralytics settings, see scripts/env.sh
+.yolo_config/
+
+# ---- Training outputs --------------------------------------------------------
+runs/
+weights/
+logs/
+wandb/
+mlruns/
+lightning_logs/
+events.out.tfevents.*
+
+# ---- Data -------------------------------------------------------------------
+# Datasets live in shared storage. Only each version's manifest.json is tracked,
+# so a dataset version stays traceable without putting images or labels in git.
+datasets/**
+!datasets/**/
+!datasets/**/manifest.json
+# Derived data, always rebuildable from datasets/ + a bake config + a seed.
+baked/
+# Replay-eval and capture videos are large; keep them in shared storage.
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.bag
+*.mcap
+
+# ---- Models and export artifacts ---------------------------------------------
+# registry/ keeps model cards (json/yaml/md); the binaries stay out of git.
+exports/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+*.trt
+*.plan
+*.axmodel
+*.rknn
+*.tflite
+*_openvino_model/
+*_ncnn_model/
+*_saved_model/
+
+# ---- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+# Ultralytics label caches and TensorRT timing caches
+*.cache
+
+# ---- Secrets and cloud credentials -------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+secrets/
+*.local
+
+# ---- Editors, OS, scratch ----------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+tmp/
+*.tmp

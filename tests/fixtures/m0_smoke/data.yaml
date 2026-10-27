@@ -1,0 +1,22 @@
+path: /home/robo/net_training/tests/fixtures/m0_smoke
+train: images
+val: images
+kpt_shape: [4, 3]
+flip_idx: [0, 1, 2, 3]
+names:
+  0: blue_0
+  1: blue_1
+  2: blue_2
+  3: blue_3
+  4: blue_4
+  5: blue_5
+  6: blue_6
+  7: blue_7
+  8: red_0
+  9: red_1
+  10: red_2
+  11: red_3
+  12: red_4
+  13: red_5
+  14: red_6
+  15: red_7

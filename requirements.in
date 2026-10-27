@@ -1,0 +1,8 @@
+# Top-level pins. Exact versions only.
+# torch and torchvision come from the cu128 index (RTX 5060 is Blackwell, sm_120), see scripts/setup_env.sh.
+# 8.4.30 is the version that exported the production YOLO26n-pose model, so M3 baselines stay comparable.
+ultralytics==8.4.30
+onnx==1.23.2
+onnxslim==0.1.98
+# Ultralytics asks for onnxruntime-gpu whenever CUDA is visible; the CPU provider is still available in it.
+onnxruntime-gpu==1.23.2
