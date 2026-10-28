@@ -1,0 +1,68 @@
+# Dot-matrix screen look for the RM27 armor module, for Daedalus (robomaster/armor/screen.rs in the simulator).
+#
+# The official style comes in mid/late December 2026. Until then this file describes a FAMILY of plausible
+# screens: every [low, high] range is sampled per robot and per sample from the run seed, so a network trained
+# on it learns "a dot grid showing a number", not one guess. When the style is published, copy this file to
+# rm27_official_v1.toml, set each range to the published value (low == high) or a tight tolerance, put the
+# official artwork in a bitmap_dir if it is not plain digits, and point the dataset config at it. Nothing else
+# changes: the data is a function of (seed, this file), and the file's hash is written into every sample.
+#
+# Known facts used here: the hit surface of the armor module is a dot-matrix screen showing the robot number or
+# a pattern (2027 build-spec manual S30); the light bars are gone in the new rules; RM27 has the small armor
+# module only (module table of the same manual). Its plate face is about 135 x 125 mm in the simulator models.
+# Everything else (active area, dot count, dot shape, brightness, refresh behavior) is a guess and is
+# randomized.
+
+name = "rm27_hypothesis_a"
+# What the labeled corners are. The labels are the corners of the dot grid's active area (outer edge of the
+# outermost dot cells), not the plate edge.
+corner_definition = "outer edge of the dot grid (hypothesis a)"
+
+# Active area on the small armor module, the only one in RM27.
+[size]
+width_mm = [108.0, 126.0]
+height_mm = [88.0, 112.0]
+offset_mm = [0.0, 0.0]
+
+[grid]
+cols = [20, 48]
+rows = [16, 40]
+dot = ["round", "square"]
+fill = [0.45, 0.85]
+px_per_dot = 8
+
+[content]
+# Height of the number or pattern as a fraction of the panel; the 5x7 font is scaled by whole dots.
+height = [0.55, 0.9]
+# <label>.png patterns (bright = lit), relative to this file. sentry, outpost and base are the stickers of the
+# old light-bar armor, extracted from the simulator models by scripts/extract_sticker_patterns.py (the outpost and
+# base ones match the 2027 build-spec manual's appendix figures 1 and 3). Robots show a number or the sentry
+# pattern; the outpost pattern appears only on outposts and the base pattern only on bases.
+bitmap_dir = "patterns"
+# The font draws labels without a pattern; the entries for sentry, outpost and base are only a fallback.
+[content.text]
+sentry = "S"
+one = "1"
+two = "2"
+three = "3"
+four = "4"
+five = "5"
+outpost = "O"
+base = "B"
+
+[light]
+# Same scale as the light-bar materials in the glTF models (blue bars about 3.1, red about 1.4); with
+# tonemapping off, above 1 a channel saturates the way an overexposed LED does on the robot camera.
+nits = [0.5, 5.0]
+red = [1.0, 0.07, 0.0]
+blue = [0.0, 0.14, 1.0]
+unlit_level = [0.0, 0.05]
+dot_jitter = 0.1
+
+[states]
+# Dark screen: labeled with the gray color slot, so training treats it as "not a target".
+off = 0.04
+# A dimmed band of rows, as a rolling-shutter camera sees a PWM-driven panel.
+flicker = 0.08
+flicker_level = [0.0, 0.35]
+flicker_band = [0.15, 0.6]

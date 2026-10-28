@@ -1,0 +1,9 @@
+# Physical size of the labeled corner quad, for PnP in nt.replay. Not part of label_spec (changing it does not
+# invalidate datasets), but it must describe the same corners: update it together with corner_definition once
+# the official RM27 style is known.
+#
+# RM27 has small armor modules only. Until the style is published this is sleepy's light-bar small plate
+# (ArmorTypeTraits in src/tasks/auto_aim/type.hpp): width is the distance between the two light bars, height
+# the light-bar length, in meters.
+corner_definition: light_bar_endpoints_rm26
+size: {width_m: 0.133, height_m: 0.055}

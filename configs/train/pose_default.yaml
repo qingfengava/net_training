@@ -1,0 +1,34 @@
+# Ultralytics train arguments for armor pose models. nt.train passes these through unchanged; command line
+# flags (--epochs, --batch, --workers, --device) override them. Start values, not tuned.
+
+imgsz: 768            # integer on purpose; rect=True then gives (B, 3, 576, 768) batches for 4:3 images
+rect: true
+epochs: 40
+batch: 16
+workers: 8
+patience: 100
+amp: true             # nt.offline replaces the AMP self-check, which would download weights
+pretrained: false     # random init keeps the 26n vs v8n comparison equal and avoids unpickling downloaded weights
+plots: false          # the plotting code downloads a font
+cache: false
+val: true
+save_period: 5        # keep snapshots so a checkpoint can be picked by our own metric, not by best.pt
+seed: 0
+deterministic: false
+
+# Geometry and color are labels here: no flips (digits do not mirror), no rotation, hue stays put.
+# Scale and crop variety already come from the bake step, so the online augmentation is gentle.
+fliplr: 0.0
+flipud: 0.0
+degrees: 0.0
+shear: 0.0
+perspective: 0.0
+mosaic: 0.0
+mixup: 0.0
+close_mosaic: 0
+erasing: 0.0
+scale: 0.25
+translate: 0.08
+hsv_h: 0.0
+hsv_s: 0.4
+hsv_v: 0.3

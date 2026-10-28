@@ -1,0 +1,42 @@
+# Bake settings: canonical dataset -> Ultralytics pose images at the network input size.
+# Everything is sampled per output image from a seed derived from (bake seed, sample id, copy), so the
+# result does not depend on worker count or order. Unknown keys are an error.
+
+size: [768, 576]        # width, height of the network input; must be 4:3 like the 1440x1080 camera
+val_fraction: 0.1       # share of source samples that go to val, chosen by a hash of the sample id
+
+roi:
+  # sleepy runs the network on a tracker-guided ROI with the network's aspect ratio, or on the whole frame.
+  full_frame_prob: 0.5
+  armor_width_multiple: [4.0, 30.0]  # ROI width = target armor width in pixels x this, log-uniform
+  min_width_px: 192
+  max_width_px: 1440
+  center_jitter: 0.3                 # target centre offset from the ROI centre, fraction of ROI size
+  tries: 12
+  # An armor that is cut by the ROI border so that this share of it remains is neither clearly in nor out.
+  # The ROI is drawn again; after `tries` the whole frame is used.
+  ambiguous_inside: [0.05, 0.6]
+
+effects:
+  gain: [0.5, 2.0]            # exposure in linear light, log-uniform
+  black_level: [0.0, 0.015]   # veiling glare, linear light
+  white_balance: [0.93, 1.07] # per channel gain; red versus blue stays recognizable
+  bloom:
+    prob: 0.7
+    threshold: 0.6            # linear light
+    sigma_px: [1.5, 6.0]
+    strength: [0.1, 0.9]
+  motion_blur:
+    prob: 0.4
+    length_px: [2, 9]
+  defocus:
+    prob: 0.4
+    sigma_px: [0.4, 1.3]
+  read_noise: [0.0, 0.012]    # sigma in linear light
+  shot_noise: [0.0, 0.02]     # sigma = k * sqrt(signal), linear light
+
+distractors:
+  # Armor-like things that are not armors: light bars, small LED panels, glowing blobs.
+  prob: 0.3
+  count: [1, 3]
+  size_vs_armor: [0.3, 2.0]   # long side relative to the target armor width in pixels

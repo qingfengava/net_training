@@ -6,3 +6,7 @@ onnx==1.23.2
 onnxslim==0.1.98
 # Ultralytics asks for onnxruntime-gpu whenever CUDA is visible; the CPU provider is still available in it.
 onnxruntime-gpu==1.23.2
+# Used directly by nt/; the versions match what Ultralytics resolved into requirements.lock.
+numpy==2.2.6
+opencv-python==5.0.0.93
+pyyaml==6.0.3

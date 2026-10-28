@@ -1,0 +1,37 @@
+# Single source of truth for labels. Every dataset manifest records the sha256 of this file.
+version: 1
+
+# Image-space corner order: top-left of the displayed face, then down the left edge, along the bottom,
+# up the right edge. Same as sleepy's ArmorKeyPointsIndex (LEFT_TOP, LEFT_BOTTOM, RIGHT_BOTTOM, RIGHT_TOP).
+corner_order: [LT, LB, RB, RT]
+
+# What a corner physically is. Must be decided once the official RM27 armor style is published
+# (expected mid/late Dec 2026). Until then datasets only promise the order above, not the physical meaning.
+corner_definition: pending_official_style
+
+# Continuous pixel coordinates: pixel i covers [i, i+1), so an image spans [0, w] x [0, h].
+pixel_convention: edge
+
+# Color slots follow sleepy's AT decoder and Daedalus ArmorColor.
+colors: {0: blue, 1: red, 2: gray, 3: purple}
+# Colors that get a training class. Others stay in canonical data and are dropped (and counted) on export.
+training_colors: [0, 1]
+# Same ids as Daedalus ArmorLabel and sleepy's ArmorClass.
+labels: {0: sentry, 1: one, 2: two, 3: three, 4: four, 5: five, 6: outpost, 7: base}
+# RM27 has small armor modules only: the 2027 build-spec manual's module table gives the heavy, infantry and
+# sentry robots 4 small modules each, and no 2027 manual mentions a large module (2026 gave the hero 4 large
+# ones). null stays legal for "unknown or not applicable".
+types: [small]
+
+# Merged training class id = index of the color in training_colors * len(labels) + label.
+
+validation:
+  corner_margin_px: 2.0         # visible corners may sit this far outside the image
+  min_edge_px: 3.0              # shorter edges are treated as degenerate
+  min_area_px: 12.0
+  small_armor_warn_px: 8.0      # longest edge below this is kept but flagged
+  max_top_edge_angle_deg: 60.0  # LT->RT angle beyond this means the corner order is wrong
+  warn_top_edge_angle_deg: 45.0 # beyond this the roll is suspicious
+  edge_ratio_range: [0.15, 8.0] # mean horizontal edge / mean vertical edge, image space, deliberately loose
+  duplicate_iou: 0.8            # corner-bbox IoU at which two labels in one frame count as the same armor
+  near_duplicate_hamming: 2     # dHash bits (of 64) at or below which two frames are near duplicates

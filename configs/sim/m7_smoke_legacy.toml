@@ -1,0 +1,41 @@
+# Tiny Daedalus export used to check the pipeline end to end. See src/dataset/ in bevy_robomaster_simulator.
+# Every key is optional; unknown keys are an error. Run with scripts/run_sim_dataset.sh.
+
+out_dir = "/home/robo/net_training/runs/sim_m7_smoke_legacy"
+seed = 1
+samples = 40
+settle_frames = 4
+timeout_frames = 300
+
+[camera]
+fov_y_deg = [35.0, 55.0]
+distance_m = [1.0, 9.0]
+height_m = [0.25, 1.8]
+max_off_axis_deg = 70.0
+frame_jitter = 0.6
+roll_deg = 4.0
+
+[light]
+illuminance = [150.0, 1500.0]
+elevation_deg = [25.0, 85.0]
+
+[scene]
+region_half_m = 2.5
+region_center = [0.0, 0.0]
+min_separation_m = 0.9
+max_tilt_deg = 6.0
+# share of samples aimed at an outpost armor and at a base armor; the rest aim at a robot
+outpost_target_fraction = 0.25
+base_target_fraction = 0.2
+
+[labels]
+min_visible_fraction = 0.35
+ignore_below_fraction = 0.05
+max_view_angle_deg = 75.0
+depth_tolerance_m = 0.05
+min_edge_px = 3.0
+
+# RM27 dot-matrix armor. Set style = "legacy" (and drop screen_spec) to get the light-bar armor back; with the
+# same seed, robots, camera and light are placed identically in both styles.
+[armor]
+style = "legacy"

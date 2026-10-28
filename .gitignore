@@ -1,5 +1,6 @@
 # ---- Environment and tool state --------------------------------------------
 .venv/
+.venv-label/
 venv/
 # project-local Ultralytics settings, see scripts/env.sh
 .yolo_config/
@@ -21,6 +22,16 @@ datasets/**
 !datasets/**/manifest.json
 # Derived data, always rebuildable from datasets/ + a bake config + a seed.
 baked/
+# Capture sessions (nt.session): frames stay out, session.json is tracked so a session stays traceable.
+sessions/**
+!sessions/**/
+!sessions/**/session.json
+# Annotation projects (nt.annotate): the images are hard links to session frames and stay out; the labelme
+# JSON files are the expensive human work, small, and tracked (batch.json, project.json and configs too).
+annot/**/*.png
+annot/**/*.jpg
+annot/**/*.jpeg
+annot/**/*.bmp
 # Replay-eval and capture videos are large; keep them in shared storage.
 *.mp4
 *.avi
