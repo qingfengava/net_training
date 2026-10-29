@@ -86,8 +86,16 @@ def summarize_errors(errs_net: list[float], errs_orig: list[float]) -> dict:
     }
 
 
-def evaluate(per_image: list[tuple[list[dict], list[dict], dict]], conf_thr: float, n_classes: int) -> dict:
-    """per_image: (detections, ground truths, image meta). Detections carry box, conf, cls, pts (4x2)."""
+def evaluate(per_image: list[tuple[list[dict], list[dict], dict]], conf_thr: float, n_classes: int,
+             parts=None) -> dict:
+    """per_image: (detections, ground truths, image meta). Detections carry box, conf, cls, pts (4x2).
+
+    parts maps a merged class id to (color, number), normally LabelSpec.from_class_id; color and number accuracy
+    compare those. Without it two colors times n_classes // 2 labels are assumed.
+    """
+    if parts is None:
+        half = n_classes // 2
+        parts = lambda c: (c // half, c % half)  # noqa: E731
     tp_by_cls: dict[int, list[tuple[float, int]]] = {c: [] for c in range(n_classes)}
     n_gt_cls = {c: 0 for c in range(n_classes)}
     n_gt = n_det = n_hit = n_cls_ok = n_color_ok = n_label_ok = 0
@@ -109,8 +117,9 @@ def evaluate(per_image: list[tuple[list[dict], list[dict], dict]], conf_thr: flo
             d, g = confident[di], gts[gi]
             n_hit += 1
             n_cls_ok += d["cls"] == g["cls"]
-            n_color_ok += d["cls"] // 8 == g["cls"] // 8
-            n_label_ok += d["cls"] % 8 == g["cls"] % 8
+            (dc, dn), (gc, gn) = parts(d["cls"]), parts(g["cls"])
+            n_color_ok += dc == gc
+            n_label_ok += dn == gn
             seen = np.array(g.get("vis", [2, 2, 2, 2])) > 0  # a corner outside the ROI has no meaningful error
             e_net = np.linalg.norm(d["pts"] - g["corners_net"], axis=1)[seen]
             e_orig = e_net / meta["scale"]
@@ -215,7 +224,7 @@ def main() -> None:
     report = {"weights": str(args.weights), "data": str(args.data), "split": args.split, "heads": {}}
     for head in heads:
         dets = predict(args.weights, images, 0.001, head, args.batch, args.device)
-        res = evaluate([(d, g, m) for d, g, m in zip(dets, gts, metas)], args.conf, spec.n_classes)
+        res = evaluate([(d, g, m) for d, g, m in zip(dets, gts, metas)], args.conf, spec.n_classes, spec.from_class_id)
         report["heads"][head or "default"] = res
         ce, ac = res["corner_error"]["orig_px"], res["at_conf"]
         print(f"[{head or 'default'}] images={res['images']} armors={res['gt_armors']} AP50={res['armor_ap50']} "

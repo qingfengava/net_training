@@ -77,16 +77,21 @@ def check_values(out: np.ndarray, spec: LabelSpec, where: str) -> list[str]:
     if ((rows[:, 4] < 0) | (rows[:, 4] > 1)).any():
         problems.append(f"{where}: confidence outside [0,1]")
     number = rows[:, 5]
-    if (number != np.round(number)).any() or number.min() < 0 or number.max() >= len(spec.labels):
-        problems.append(f"{where}: number column is not an integer id in [0,{len(spec.labels) - 1}]")
+    if not set(number.tolist()) <= {float(i) for i in spec.number_ids}:
+        problems.append(f"{where}: number column holds ids outside label_spec {list(spec.number_ids)}")
     colors = rows[:, 6:10]
     onehot = (colors.sum(axis=1) == 1) & ((colors == 0) | (colors == 1)).all(axis=1)
     if not onehot.all():
         problems.append(f"{where}: color scores are not one-hot")
     else:
-        trained = set(spec.training_colors)
-        if not set(int(i) for i in colors.argmax(axis=1)) <= trained:
-            problems.append(f"{where}: a color outside training_colors {sorted(trained)} was produced")
+        slots = colors.argmax(axis=1)
+        trained = {c for c in spec.colors if spec.trains(c)}
+        if not set(int(i) for i in slots) <= trained:
+            problems.append(f"{where}: a color outside training_colors and the off class {sorted(trained)} was produced")
+        if spec.off_class is not None:
+            off_color, off_number = spec.off_class[:2]
+            if ((slots == off_color) != (number == off_number)).any():
+                problems.append(f"{where}: the off color and the off number do not always come together")
     return problems
 
 

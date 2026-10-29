@@ -73,7 +73,7 @@ def make_sheet(root: Path, spec: LabelSpec, n: int, seed: int, tile: int, cols: 
         if img is None:
             continue
         a = s.armors[k]
-        name = f"{spec.colors.get(a.color, '?')}_{spec.labels.get(a.label, '?')}"
+        name = spec.pair_name(a.color, a.label)
         tiles.append(render_tile(img, a, f"{s.id[-8:]}#{k} {name} vis={''.join(map(str, a.vis))}", tile))
     if not tiles:
         return None

@@ -79,7 +79,7 @@ class DetectorTest(Base):
         img = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
         _, s, pl, pt = letterbox(img, 128, 96)
         self.assertEqual((s, pl, pt), (0.5, 0, 0))
-        for kind, cls, want in (("praysky", 1, (3, "small")), ("nt_contract", 5, (5, None))):
+        for kind, cls, want in (("praysky", 1, (3, "small")), ("nt_contract", 4, (4, None))):
             m = ArmorModel(fake_model(self.tmp / f"{kind}.onnx", [det_row(0.9, cls, 1, PLATE_NET)], kind))
             (d,) = m.detect(img, 0.25)
             self.assertEqual((d.label, d.type, d.color), (*want, 1))

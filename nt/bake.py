@@ -234,7 +234,7 @@ def bake_one(task: dict) -> dict:
         return {"error": f"cannot read {sample.image}", "sample": sample.id}
     img_h, img_w = img.shape[:2]
 
-    trained = [a for a in sample.armors if a.color in spec.training_colors and len(a.corners) == 4]
+    trained = [a for a in sample.armors if spec.trains(a.color) and len(a.corners) == 4]
     skipped_colors = len(sample.armors) - len(trained)
     boxes = [bbox(a.corners) for a in trained]
     roi, how = choose_roi(rng, img_w, img_h, boxes, cfg)

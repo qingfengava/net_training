@@ -120,11 +120,11 @@ class IngestTest(unittest.TestCase):
         edited = []
         for ln in lines:
             d = json.loads(ln)
-            d["armors"][0]["color"] = 2
+            d["armors"][0]["color"] = 3  # purple has no training class (gray does: it is the off class)
             edited.append(json.dumps(d))
         (canon / "labels.jsonl").write_text("\n".join(edited) + "\n")
         stats = canonical_to_yolo(canon, self.tmp / "yolo", SPEC)
-        self.assertEqual((stats["armors"], stats["skipped_untrained_colors"]), (3, {"gray": 3}))
+        self.assertEqual((stats["armors"], stats["skipped_untrained_colors"]), (3, {"purple": 3}))
 
 
 def write_sim_export(root: Path, n: int = 2, declared_w: int = 300):

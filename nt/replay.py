@@ -128,7 +128,7 @@ def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict
     dets, poses = [], []
     for i, f in enumerate(frames):
         img = cv2.imread(str(session_dir / f["image"]), cv2.IMREAD_COLOR)
-        ds = model.detect(img, conf, tiles)
+        ds = [d for d in model.detect(img, conf, tiles) if spec.valid_pair(d.color, d.label)]  # an old model may report 2 or 5
         dets.append(ds)
         poses.append([solve(d, K, dist, geometry) if K is not None else None for d in ds])
         if (i + 1) % 200 == 0:
@@ -161,7 +161,7 @@ def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict
         yaw_jumps += t_jumps
         first = dets[t[0][0]][t[0][1]]
         per_track.append({"start_frame": frames[t[0][0]]["id"], "frames": len(t), "dropouts": t_drop, "flips": t_flips,
-                          "yaw_jumps": t_jumps, "class": f"{spec.colors[first.color]}_{spec.labels[first.label]}"})
+                          "yaw_jumps": t_jumps, "class": spec.pair_name(first.color, first.label)})
     n_det = sum(len(ds) for ds in dets)
     duration = None
     if frames and frames[-1].get("t_s") is not None and frames[0].get("t_s") is not None:
@@ -171,7 +171,7 @@ def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict
         "geometry": geometry.get("corner_definition"), "frames": len(frames), "frame_stride": stride,
         "duration_s": duration, "detections": n_det,
         "frames_with_detections": sum(1 for ds in dets if ds),
-        "classes": dict(Counter(f"{spec.colors[d.color]}_{spec.labels[d.label]}" for ds in dets for d in ds)),
+        "classes": dict(Counter(spec.pair_name(d.color, d.label) for ds in dets for d in ds)),
         "tracks": {"all": len(tracks), f"at_least_{min_track}_frames": len(long_tracks),
                    "dropouts": dropouts, "flips": flips, "yaw_jumps": yaw_jumps},
         "jitter": None if K is None else {"distance_pct": _stats(d_dist), "yaw_deg": _stats(d_yaw), "pitch_deg": _stats(d_pitch),
@@ -186,7 +186,7 @@ def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict
     for k, (f, ds, ps) in enumerate(zip(frames, dets, poses)):
         for j, (d, p) in enumerate(zip(ds, ps)):
             rows.append({"frame": f["id"], "index": f["index"], "t_s": f["t_s"], "det": j, "conf": round(d.conf, 4),
-                         "class": f"{spec.colors[d.color]}_{spec.labels[d.label]}",
+                         "class": spec.pair_name(d.color, d.label),
                          **({} if p is None else {k2: round(v, 4) if isinstance(v, float) else v for k2, v in p.items()})})
     return summary, rows, long_tracks, dets, poses
 

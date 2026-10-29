@@ -60,6 +60,14 @@ class FromDocumentTest(unittest.TestCase):
         _, problems, _, _ = lm.from_document(doc_with(shapes), SPEC)
         self.assertEqual(sorted(c for c, _ in problems), ["E_LM_LABEL", "E_LM_POINTS", "E_LM_SHAPE", "E_LM_UNRESOLVED"])
 
+    def test_dark_screen_with_an_unseen_number(self):
+        pts = rect(150, 100, 60, 25, 0)
+        armors, problems, _, _ = lm.from_document(doc_with([lm.polygon(pts, "gray_unknown")]), SPEC)
+        self.assertEqual(problems, [])
+        self.assertEqual((armors[0].color, armors[0].label), SPEC.off_class[:2])
+        _, problems, _, _ = lm.from_document(doc_with([lm.polygon(pts, "red_unknown")]), SPEC)
+        self.assertEqual([c for c, _ in problems], ["E_LM_LABEL"])
+
     def test_labelme_config_lists_every_label_once(self):
         cfg = lm.labelme_config(SPEC)
         self.assertEqual(len(cfg["labels"]), len(set(cfg["labels"])))

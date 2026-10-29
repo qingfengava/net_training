@@ -52,7 +52,7 @@ def canonical_to_yolo(src: Path, dst: Path, spec: LabelSpec, margin: float = 0.1
                 os.symlink((src / s.image).resolve(), link)
         lines = []
         for a in s.armors:
-            if a.color not in spec.training_colors:
+            if not spec.trains(a.color):
                 skipped[spec.colors.get(a.color, str(a.color))] += 1
                 continue
             row = pose_line(spec.class_id(a.color, a.label), a.corners, a.vis, s.w, s.h, margin)

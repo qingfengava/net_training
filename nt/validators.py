@@ -49,9 +49,9 @@ def armor_issues(a: Armor, w: int, h: int, spec: LabelSpec) -> list[tuple[str, s
     out: list[tuple[str, str, str]] = []
     v = spec.validation
 
-    if a.color not in spec.colors or a.label not in spec.labels:
+    if not spec.valid_pair(a.color, a.label):
         out.append(("error", "E_CLASS_ILLEGAL", f"color={a.color} label={a.label}"))
-    elif a.color not in spec.training_colors:
+    elif not spec.trains(a.color):
         out.append(("warn", "W_COLOR_NOT_TRAINED", f"color {spec.colors[a.color]} has no training class"))
     if a.type is not None and a.type not in spec.types:
         out.append(("error", "E_CLASS_ILLEGAL", f"type={a.type!r}"))

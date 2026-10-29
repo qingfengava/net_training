@@ -35,12 +35,17 @@ LABELME_VERSION = "5.4.1"  # format version written into the file; labelme 5.x a
 
 
 def armor_label(spec: LabelSpec, color: int, label: int) -> str:
-    return f"{spec.colors[color]}_{spec.labels[label]}"
+    return spec.pair_name(color, label)
 
 
 def armor_labels(spec: LabelSpec) -> dict[str, tuple[int, int]]:
-    """label text -> (color slot, label id), for every color, trained or not: canonical data keeps them all."""
-    return {armor_label(spec, c, l): (c, l) for c in sorted(spec.colors) for l in sorted(spec.labels)}
+    """label text -> (color slot, label id), for every color, trained or not: canonical data keeps them all. The
+    off color also gets <off color>_<off name> (gray_unknown) for a dark screen whose number nobody can see."""
+    names = {armor_label(spec, c, l): (c, l) for c in sorted(spec.colors) for l in sorted(spec.labels)}
+    if spec.off_class is not None:
+        c, n, _ = spec.off_class
+        names[armor_label(spec, c, n)] = (c, n)
+    return names
 
 
 def labelme_config(spec: LabelSpec) -> dict:

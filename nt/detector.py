@@ -75,7 +75,7 @@ class ArmorModel:
             self.kind = "nt_contract"
             contract = json.loads(meta["nt_contract"])
             self.contract = contract
-            self.n_labels = len(contract["numbers"])
+            self.label_ids = {int(k) for k in contract["numbers"]}
             self.classes = None
         elif "names" in meta:
             names = _parse_names(meta["names"])
@@ -106,7 +106,7 @@ class ArmorModel:
             cid = int(r[5])
             color = int(np.argmax(r[6:10]))
             if self.kind == "nt_contract":
-                if not 0 <= cid < self.n_labels:
+                if cid not in self.label_ids:
                     continue
                 label, typ = cid, None
             else:

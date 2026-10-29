@@ -258,7 +258,7 @@ def ingest(
 
     if reordered:
         notes.append(f"reordered corners on {reordered} armors")
-    class_counts = Counter(f"{spec.colors[a.color]}_{spec.labels[a.label]}" for s in accepted for a in s.armors)
+    class_counts = Counter(spec.pair_name(a.color, a.label) for s in accepted for a in s.armors)
     labels_text = "".join(dumps(sample_to_dict(s)) + "\n" for s in accepted)
     manifest = Manifest(
         name=name,

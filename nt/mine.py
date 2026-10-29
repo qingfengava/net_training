@@ -188,7 +188,8 @@ def main() -> None:
         dets = []
         for i, f in enumerate(frames):
             img = cv2.imread(str(args.path / f["image"]), cv2.IMREAD_COLOR)
-            dets.append(model.detect(img, args.review_conf, args.tiles))
+            # an old model can still report robots 2 and 5, which RM27 does not have
+            dets.append([d for d in model.detect(img, args.review_conf, args.tiles) if spec.valid_pair(d.color, d.label)])
             if (i + 1) % 200 == 0:
                 print(f"  {i + 1}/{len(frames)} frames", file=sys.stderr, flush=True)
         rows = score_session(frames, dets, spec, meta["width"], meta["height"], args.conf, args.jump)
@@ -200,7 +201,7 @@ def main() -> None:
         dets = []
         for i, s in enumerate(samples):
             img = cv2.imread(str(args.path / s.image), cv2.IMREAD_COLOR)
-            dets.append(model.detect(img, args.conf, args.tiles))
+            dets.append([d for d in model.detect(img, args.conf, args.tiles) if spec.valid_pair(d.color, d.label)])
             if (i + 1) % 200 == 0:
                 print(f"  {i + 1}/{len(samples)} samples", file=sys.stderr, flush=True)
         rows = score_labeled(samples, dets, spec, args.corner_px)

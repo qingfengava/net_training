@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from nt.contract import (
-    SLEEPY_CLASSES, check_model, check_values, compare_decoders, reference_decode, run_cpp,
+    SLEEPY_CLASSES, SLEEPY_COLORS, check_model, check_values, compare_decoders, reference_decode, run_cpp,
 )
 from nt.spec import LabelSpec
 
@@ -36,11 +36,19 @@ class ReferenceDecoderTest(unittest.TestCase):
         # The exported number ids are the spec's label ids, and sleepy's table must name them the same way.
         for label_id, name in SPEC.labels.items():
             self.assertEqual(SLEEPY_CLASSES[label_id], name)
+        # the off class exports as sleepy's UNKNOWN with the color slot sleepy reads as NONE
+        off_color, off_number, off_name = SPEC.off_class
+        self.assertEqual((SLEEPY_CLASSES[off_number], off_name), ("unknown", "unknown"))
+        self.assertEqual(SLEEPY_COLORS[off_color], "none")
+
+    def test_off_armor_decodes_as_unknown_none(self):
+        a = reference_decode(row(8, 2, [(20, 15), (20, 35), (80, 35), (80, 15)])[None], 0.2)[0]
+        self.assertEqual((a["number"], a["color"]), ("unknown", "none"))
 
     def test_decodes_number_color_and_corners(self):
         corners = [(20, 15), (20, 35), (80, 35), (80, 15)]  # LT, LB, RB, RT
-        a = reference_decode(row(5, 1, corners)[None], 0.2)[0]
-        self.assertEqual((a["number"], a["color"]), ("five", "red"))
+        a = reference_decode(row(4, 1, corners)[None], 0.2)[0]
+        self.assertEqual((a["number"], a["color"]), ("four", "red"))
         self.assertEqual((a["lt"], a["lb"], a["rb"], a["rt"]), tuple(map(tuple, [corners[0], corners[1], corners[2], corners[3]])))
 
     def test_threshold_and_unknown_class_are_dropped(self):
@@ -72,13 +80,17 @@ class ValueCheckTest(unittest.TestCase):
         self.assertTrue(any("number" in p for p in check_values(bad, SPEC, "num")))
         bad = self.good(); bad[0, 0, 6:10] = [1, 1, 0, 0]
         self.assertTrue(any("one-hot" in p for p in check_values(bad, SPEC, "oh")))
-        bad = self.good(); bad[0, 0, 6:10] = [0, 0, 1, 0]  # gray is not a trained color
-        self.assertTrue(any("training_colors" in p for p in check_values(bad, SPEC, "gray")))
+        bad = self.good(); bad[0, 0, 6:10] = [0, 0, 0, 1]  # purple is not trained
+        self.assertTrue(any("training_colors" in p for p in check_values(bad, SPEC, "purple")))
+        bad = self.good(); bad[0, 0, 6:10] = [0, 0, 1, 0]  # gray (off) needs the off number 8
+        self.assertTrue(any("off" in p for p in check_values(bad, SPEC, "gray")))
+        ok = self.good(); ok[0, 0, 6:10] = [0, 0, 1, 0]; ok[0, 0, 5] = 8
+        self.assertEqual(check_values(ok, SPEC, "off"), [])
         bad = self.good(); bad[0, 0, 12] = np.nan
         self.assertTrue(any("non-finite" in p for p in check_values(bad, SPEC, "nan")))
 
     def test_decoder_comparison_reports_differences(self):
-        a = {"conf": 0.9, "number": "five", "color": "red", "lt": (1, 2), "lb": (1, 3), "rb": (4, 3), "rt": (4, 2)}
+        a = {"conf": 0.9, "number": "three", "color": "red", "lt": (1, 2), "lb": (1, 3), "rb": (4, 3), "rt": (4, 2)}
         self.assertEqual(compare_decoders([a], [dict(a)], "t"), [])
         self.assertTrue(compare_decoders([a], [dict(a, number="four")], "t"))
         self.assertTrue(compare_decoders([a], [dict(a, rt=(9, 9))], "t"))
@@ -143,17 +155,21 @@ class ExportTest(unittest.TestCase):
         stock = ort.InferenceSession(str(stock_path), providers=["CPUExecutionProvider"])
         new = ort.InferenceSession(str(self.paths["yolo26n-pose-armor"]), providers=["CPUExecutionProvider"])
         rng = np.random.default_rng(1)
-        n_labels, seen = len(SPEC.labels), set()
+        numbers = np.array([n for _, n in SPEC.classes], np.float32)
+        slots = np.array([c for c, _ in SPEC.classes])
+        seen = set()
         for trial in range(4):
             x = rng.random((1, 3, 576, 768), dtype=np.float32) * (0.2 + 0.25 * trial)
             s, n = stock.run(None, {"images": x})[0][0], new.run(None, {"images": x})[0][0]
             cid = s[:, 5].astype(int)
             seen |= set(cid.tolist())
             np.testing.assert_array_equal(n[:, :5], s[:, :5])
-            np.testing.assert_array_equal(n[:, 5], (cid % n_labels).astype(np.float32))
-            np.testing.assert_array_equal(n[:, 6:10], np.eye(4, dtype=np.float32)[[SPEC.training_colors[c // n_labels] for c in cid]])
+            # the number column is the label id, which has gaps (no robot 2 or 5)
+            # number and color come from the class table, ids with gaps and the off class included
+            np.testing.assert_array_equal(n[:, 5], numbers[cid])
+            np.testing.assert_array_equal(n[:, 6:10], np.eye(4, dtype=np.float32)[slots[cid]])
             np.testing.assert_array_equal(n[:, 10:18], np.stack([s[:, [6 + 3 * k, 7 + 3 * k]] for k in range(4)], axis=1).reshape(30, 8))
-        self.assertTrue(any(c < n_labels for c in seen) and any(c >= n_labels for c in seen), "both colors must be exercised")
+        self.assertGreaterEqual(len({int(slots[c]) for c in seen}), 2, "at least two color slots must be exercised")
 
     @unittest.skipUnless(SLEEPY_BUILT, "needs a built sleepy checkout")
     def test_real_sleepy_decoder_agrees_with_the_python_reference(self):

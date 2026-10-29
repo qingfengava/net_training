@@ -3,6 +3,9 @@ import unittest
 import numpy as np
 
 from nt.eval import average_precision, box_of, evaluate, iou, match
+from nt.spec import LabelSpec
+
+SPEC = LabelSpec.load()
 
 
 def quad(cx, cy, w=40.0, h=16.0):
@@ -104,6 +107,13 @@ class GroundTruthAsPredictionTest(unittest.TestCase):
         self.assertGreater(noisy["corner_error"]["net_px"]["p95"], noisy["corner_error"]["net_px"]["p50"])
         none = evaluate([([], g, m) for g, m in images], 0.2, 16)
         self.assertEqual((none["armor_ap50"], none["at_conf"]["recall"]), (0.0, 0.0))
+
+
+class ColorAndLabelAccuracyTest(unittest.TestCase):
+    def test_uses_the_spec_label_count(self):
+        # class 3 is blue four, class 9 is red four: same number, other color
+        r = evaluate([([det(100, 100, 3)], [gt(100, 100, 9)], META)], 0.2, SPEC.n_classes, SPEC.from_class_id)["at_conf"]
+        self.assertEqual((r["color_acc"], r["label_acc"], r["class_acc"]), (0.0, 1.0, 0.0))
 
 
 if __name__ == "__main__":

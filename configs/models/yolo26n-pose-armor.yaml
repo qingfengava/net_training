@@ -2,7 +2,7 @@
 # Derived from ultralytics/cfg/models/26/yolo26-pose.yaml (8.4.30), AGPL-3.0.
 # The file name keeps the "yolo26n" and "pose" tokens because Ultralytics reads scale and task from it.
 
-nc: 16 # blue 0-7, red 8-15; label order Sentry, 1..5, Outpost, Base (matches Daedalus ArmorLabel)
+nc: 13 # blue 0-5, red 6-11 (sentry, one, three, four, outpost, base), 12 off; configs/label_spec.yaml
 end2end: True
 reg_max: 1
 kpt_shape: [4, 3] # LT, LB, RB, RT; x, y, visibility

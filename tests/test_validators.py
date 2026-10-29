@@ -48,7 +48,10 @@ class ArmorValidationTest(unittest.TestCase):
         self.assertIn("E_CLASS_ILLEGAL", codes(armor(color=9)))
         self.assertIn("E_CLASS_ILLEGAL", codes(armor(label=8)))
         self.assertIn("E_CLASS_ILLEGAL", codes(armor(type="huge")))
-        self.assertEqual(codes(armor(color=2)), {"W_COLOR_NOT_TRAINED"})
+        self.assertEqual(codes(armor(color=3)), {"W_COLOR_NOT_TRAINED"})  # purple; gray is the off class
+        self.assertEqual(codes(armor(color=2)), set())
+        self.assertEqual(codes(armor(color=2, label=8)), set())  # dark screen, number unseen
+        self.assertEqual(codes(armor(color=1, label=8)), {"E_CLASS_ILLEGAL"})
 
     def test_degenerate_and_nonfinite(self):
         self.assertIn("E_QUAD_DEGENERATE", codes(armor(rect(320, 240, 2, 1))))
@@ -75,7 +78,7 @@ class SampleValidationTest(unittest.TestCase):
         self.assertIn(("error", "E_ARMOR_DUP"), self.levels(sample([armor(), armor()])))
 
     def test_overlap_with_other_class_is_a_warning(self):
-        self.assertEqual(self.levels(sample([armor(), armor(label=2)])), {("warn", "W_LABEL_CONFLICT")})
+        self.assertEqual(self.levels(sample([armor(), armor(label=4)])), {("warn", "W_LABEL_CONFLICT")})
 
     def test_size_mismatch(self):
         self.assertIn(("error", "E_SIZE_MISMATCH"), self.levels(sample([armor()]), hw=(480, 641)))

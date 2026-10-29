@@ -109,7 +109,7 @@ def _det_shapes(spec: LabelSpec, d, w: int, h: int, conf: float, unresolved_reas
     if flagged:
         reason = (reason + "; " if reason else "") + ",".join(flagged)
     desc = f"auto conf={d.conf:.3f}" + (f" review: {reason}" if reason else "")
-    if d.color not in spec.colors or d.label not in spec.labels:
+    if not spec.valid_pair(d.color, d.label):
         return []
     return lm.armor_shapes(spec, d.color, d.label, d.corners.tolist(), w=w, h=h, description=desc,
                            unresolved=reason is not None, group_id=group_id)
@@ -210,7 +210,8 @@ def export(
                     img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
                     if img is None or img.shape[:2] != (h, w):
                         raise ValueError(f"{img_path}: unreadable or not {w}x{h}")
-                    dets = model.detect(img, review_conf, tiles)
+                    # an old model can still report robots 2 and 5, which RM27 does not have
+                    dets = [d for d in model.detect(img, review_conf, tiles) if spec.valid_pair(d.color, d.label)]
                     for d in dets:
                         if existing is not None:
                             # re-review: only what the labels do not already cover is worth a look

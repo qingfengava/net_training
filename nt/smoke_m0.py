@@ -17,7 +17,9 @@ MODEL_YAML = ROOT / "configs/models/yolo26n-pose-armor.yaml"
 FIXTURE = ROOT / "tests/fixtures/m0_smoke/data.yaml"
 IMG_H, IMG_W = 576, 768
 MAX_DET = 30
-NC, NKPT, KDIM = 16, 4, 3
+from nt.spec import LabelSpec  # noqa: E402
+
+NC, NKPT, KDIM = LabelSpec.load().n_classes, 4, 3
 OUT_COLS = 4 + 1 + 1 + NKPT * KDIM  # box, conf, cls, kpts with visibility
 
 results: list[tuple[str, bool, str]] = []

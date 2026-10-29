@@ -5,13 +5,15 @@
 Output tensor [1, 30, 18], one row per detection:
     0..3   box x1, y1, x2, y2 in network-input pixels
     4      confidence in [0, 1]
-    5      armor number id, float: 0 sentry, 1..5 numbers, 6 outpost, 7 base   (sleepy's ArmorClass order)
-    6..9   color scores, one-hot over [blue, red, gray, purple]
+    5      armor number id, float, from label_spec: 0 sentry, 1, 3, 4, 6 outpost, 7 base (sleepy's ArmorClass ids;
+           RM27 has no robot 2 or 5), or 8 (UNKNOWN) for a dark screen
+    6..9   color scores, one-hot over [blue, red, gray, purple]; a dark screen is gray (sleepy: NONE)
     10..17 keypoints x, y for LT, LB, RB, RT in network-input pixels
 
-Training uses merged classes (color * n_labels + label). Ultralytics exports the stock end-to-end graph
-(or NMS inside the graph for non-end-to-end models) as box4, conf, cls, then (x, y, visibility) per keypoint;
-this module appends a few operators that split the merged class and drop the visibility columns, so the
+Training uses merged classes (label_spec class table: training colors x labels, then the off class). Ultralytics
+exports the stock end-to-end graph (or NMS inside the graph for non-end-to-end models) as box4, conf, cls, then
+(x, y, visibility) per keypoint; this module appends a few operators that look the merged class up in the class
+table (number and color slot) and drop the visibility columns, so the
 decoder needs no change and the model keeps one export path. A contract.json is written next to the model
 and embedded in the ONNX metadata under `nt_contract`; nt.contract checks both.
 """
@@ -29,7 +31,7 @@ import numpy as np
 
 from nt.spec import LabelSpec
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2  # 2: off class (number 8, gray) and the class table in the contract
 MAX_DET = 30
 IMG_H, IMG_W = 576, 768
 N_KPT = 4
@@ -53,9 +55,11 @@ def contract_for(spec: LabelSpec, source: dict | None = None) -> dict:
             "coordinates": "network-input pixels",
             "keypoint_order": list(spec.corner_order),
         },
-        "numbers": {str(k): v for k, v in sorted(spec.labels.items())},
+        "numbers": {str(k): spec.number_name(k) for k in spec.number_ids},
         "color_slots": {str(k): v for k, v in sorted(spec.colors.items())},
         "training_colors": list(spec.training_colors),
+        "off_class": None if spec.off_class is None else {"color": spec.off_class[0], "number": spec.off_class[1]},
+        "classes": [list(c) for c in spec.classes],
         "label_spec_sha256": spec.sha256,
         "corner_definition": spec.corner_definition,
         "source": source or {},
@@ -77,8 +81,8 @@ def append_remap(model, spec: LabelSpec):
         for i, name in enumerate(node.output):
             if name == old_name:
                 node.output[i] = stock
-    n_labels = len(spec.labels)
-    color_ids = np.array([float(c) for c in spec.training_colors], np.float32)
+    class_numbers = np.array([float(n) for _, n in spec.classes], np.float32)
+    class_slots = np.array([float(c) for c, _ in spec.classes], np.float32)
     nodes, inits = [], []
 
     def const(name, arr):
@@ -93,14 +97,12 @@ def append_remap(model, spec: LabelSpec):
 
     slice_cols(stock, 0, 5, "p_box_conf")                     # box4 + conf
     slice_cols(stock, 5, 6, "p_cls")                          # merged class id as float
-    nodes.append(h.make_node("Div", ["p_cls", const("c_nl", np.array(n_labels, np.float32))], ["p_div"]))
-    nodes.append(h.make_node("Floor", ["p_div"], ["p_group"]))                      # index into training_colors
-    nodes.append(h.make_node("Mul", ["p_group", "c_nl"], ["p_base"]))
-    nodes.append(h.make_node("Sub", ["p_cls", "p_base"], ["p_number"]))              # label id = cls mod n_labels
-    # group (0, 1, ...) -> color slot via a constant lookup, then one-hot over the 4 color slots.
-    nodes.append(h.make_node("Cast", ["p_group"], ["p_group_i"], to=T.INT64))
-    nodes.append(h.make_node("Squeeze", ["p_group_i", const("c_ax2", np.array([2], np.int64))], ["p_group_v"]))
-    nodes.append(h.make_node("Gather", [const("c_slots", color_ids), "p_group_v"], ["p_slot"], axis=0))
+    # merged class -> (number, color slot) through the class table; the off class has no number of its own
+    nodes.append(h.make_node("Cast", ["p_cls"], ["p_cls_i"], to=T.INT64))
+    nodes.append(h.make_node("Squeeze", ["p_cls_i", const("c_ax2", np.array([2], np.int64))], ["p_cls_v"]))
+    nodes.append(h.make_node("Gather", [const("c_numbers", class_numbers), "p_cls_v"], ["p_num_v"], axis=0))
+    nodes.append(h.make_node("Unsqueeze", ["p_num_v", "c_ax2"], ["p_number"]))
+    nodes.append(h.make_node("Gather", [const("c_slots", class_slots), "p_cls_v"], ["p_slot"], axis=0))
     nodes.append(h.make_node("Unsqueeze", ["p_slot", "c_ax2"], ["p_slot_u"]))
     nodes.append(h.make_node("Equal", ["p_slot_u", const("c_range", np.arange(len(spec.colors), dtype=np.float32))], ["p_eq"]))
     nodes.append(h.make_node("Cast", ["p_eq"], ["p_color"], to=T.FLOAT))
