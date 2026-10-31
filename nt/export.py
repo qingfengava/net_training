@@ -141,11 +141,15 @@ def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: s
     import onnx
     from ultralytics import YOLO
 
-    model = YOLO(str(weights), task="pose")
-    e2e = bool(getattr(model.model, "end2end", False))
     with tempfile.TemporaryDirectory() as tmp:
+        # Ultralytics writes the ONNX next to a .pt checkpoint, or to the working directory for yaml-built
+        # models. A private copy keeps both cases in tmp, also for a relative --weights path after the chdir.
+        local = Path(tmp) / Path(weights).name
+        shutil.copy2(weights, local)
+        model = YOLO(str(local), task="pose")
+        e2e = bool(getattr(model.model, "end2end", False))
         cwd = os.getcwd()
-        os.chdir(tmp)  # Ultralytics writes next to the working directory for yaml-built models
+        os.chdir(tmp)
         try:
             stock = Path(model.export(format="onnx", imgsz=[IMG_H, IMG_W], batch=1, half=False, dynamic=False,
                                       simplify=True, opset=opset, max_det=MAX_DET, nms=not e2e, device=device, verbose=False))

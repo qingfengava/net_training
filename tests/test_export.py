@@ -18,6 +18,8 @@ from nt.spec import LabelSpec
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = LabelSpec.load()
+# Every yaml in configs/models: the two model families and the M5 attention variants of YOLO26n.
+MODEL_YAMLS = sorted(p.stem for p in (ROOT / "configs" / "models").glob("*.yaml"))
 SLEEPY_BUILT = all((Path.home() / "sleepy" / "build" / f).exists() for f in ("libsleepy_utils.so", "compile_commands.json"))
 
 
@@ -101,10 +103,11 @@ def export_random_model(name: str, out: Path):
     import torch
     from ultralytics import YOLO
 
-    from nt import offline
+    from nt import modules, offline
     from nt.export import export
 
     offline.apply()
+    modules.register()
     m = YOLO(str(ROOT / "configs" / "models" / f"{name}.yaml"), task="pose")
     weights = out / f"{name}.pt"
     torch.save({"model": m.model.half().float(), "date": "random-init", "version": "test", "epoch": -1,
@@ -118,14 +121,14 @@ class ExportTest(unittest.TestCase):
         cls._tmp = tempfile.TemporaryDirectory()
         cls.dir = Path(cls._tmp.name)
         cls.cwd = os.getcwd()
-        cls.paths = {n: export_random_model(n, cls.dir) for n in ("yolo26n-pose-armor", "yolov8n-pose-armor")}
+        cls.paths = {n: export_random_model(n, cls.dir) for n in MODEL_YAMLS}
 
     @classmethod
     def tearDownClass(cls):
         os.chdir(cls.cwd)
         cls._tmp.cleanup()
 
-    def test_both_model_families_conform(self):
+    def test_every_model_yaml_conforms(self):
         for name, path in self.paths.items():
             self.assertEqual(check_model(path, SPEC), [], name)
 

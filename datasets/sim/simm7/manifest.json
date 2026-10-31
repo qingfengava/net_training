@@ -1,0 +1,54 @@
+{
+  "class_counts": {
+    "blue_base": 527,
+    "blue_four": 1111,
+    "blue_one": 1065,
+    "blue_outpost": 535,
+    "blue_sentry": 1046,
+    "blue_three": 1039,
+    "gray_base": 40,
+    "gray_four": 219,
+    "gray_one": 193,
+    "gray_outpost": 43,
+    "gray_sentry": 218,
+    "gray_three": 195,
+    "red_base": 523,
+    "red_four": 1115,
+    "red_one": 1114,
+    "red_outpost": 853,
+    "red_sentry": 1095,
+    "red_three": 1001
+  },
+  "corner_definition": "pending_official_style",
+  "counts": {
+    "accepted_samples": 2899,
+    "armors": 11932,
+    "input_samples": 3000,
+    "negative_frames": 28,
+    "rejected_samples": 101
+  },
+  "created_utc": "2026-10-30T14:19:32Z",
+  "image_formats": {
+    ".png": 2899
+  },
+  "images_sha256": "07dec61b80498a98ef86b8acfb5b3fa9994ede34ec024cac5e4585b125c7d31e",
+  "importer": "canonical-jsonl@1",
+  "issues": {
+    "W_NEAR_DUPLICATE_FRAME": 31,
+    "W_QUAD_ROLL": 280,
+    "W_SMALL_ARMOR": 106
+  },
+  "label_spec_sha256": "625f6b06eec0396ba78e18980adec2564161691458e492d289091de656c5938b",
+  "labels_sha256": "8dcdab87663e86b2adff131f0d66c7de903280c06bafa077da7b0da6de96f776",
+  "name": "simm7",
+  "notes": [
+    "canonical-jsonl: labels come straight from the simulator, which also records scene parameters"
+  ],
+  "pixel_convention": "edge",
+  "rejected": {
+    "E_QUAD_ORDER": 105
+  },
+  "role": "auto",
+  "source": "sim",
+  "src_path": "/home/robo/net_training/runs/sim_m7"
+}

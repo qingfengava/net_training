@@ -1,7 +1,7 @@
 """Train a pose model on a baked dataset.
 
     python -m nt.train --model configs/models/yolo26n-pose-armor.yaml --data baked/NAME --name y26n_a \\
-        [--hyp configs/train/pose_default.yaml] [--epochs N] [--batch B] [--workers W] [--fraction F] [--device 0]
+        [--hyp configs/train/pose_default.yaml] [--epochs N] [--batch B] [--workers W] [--seed S] [--fraction F] [--device 0]
 
 The baked data.yaml records the absolute path of the machine that baked it. A copy with this machine's path is
 written next to the run (the dataset itself is never edited), so a baked directory can be copied to a cloud
@@ -39,9 +39,12 @@ def main() -> None:
     ap.add_argument("--epochs", type=int)
     ap.add_argument("--batch", type=int)
     ap.add_argument("--workers", type=int)
+    ap.add_argument("--seed", type=int, help="weight init and data order; repeat a run with another seed to measure noise")
     ap.add_argument("--fraction", type=float, help="train on only this share of the training images (pipeline checks)")
     ap.add_argument("--device", default="0")
     args = ap.parse_args()
+    # Ultralytics puts a relative project under runs/<task>/, so the run would land elsewhere than nt_meta.json
+    args.project = args.project.resolve()
 
     from nt import offline
 
@@ -50,8 +53,12 @@ def main() -> None:
     import ultralytics
     from ultralytics import YOLO
 
+    from nt import modules
+
+    modules.register()  # yaml names such as CoordAtt
+
     hyp = yaml.safe_load(args.hyp.read_text())
-    for key in ("epochs", "batch", "workers", "fraction"):
+    for key in ("epochs", "batch", "workers", "seed", "fraction"):
         if getattr(args, key) is not None:
             hyp[key] = getattr(args, key)
     data_yaml = args.data / "data.yaml"
