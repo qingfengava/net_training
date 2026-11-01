@@ -1,0 +1,9 @@
+# pose_default.yaml on a rented GPU machine: the same training, more data-loader processes.
+#
+# Ultralytics starts `workers` processes for training and twice as many for validation, each holding about
+# 0.5-1.1 GB here, so workers 8 means about 24 processes and roughly 20 GB of RAM (an estimate scaled from the
+# 8.5 GB measured locally with workers 4). Rent 32 GB or more, or lower this. Ultralytics also caps it at the
+# CPU count. batch stays 16: the optimizer step already accumulates to nbs 64, and keeping batch equal keeps
+# cloud runs comparable with the local ones; raise it only as a separate, measured change.
+base: pose_default.yaml
+workers: 8

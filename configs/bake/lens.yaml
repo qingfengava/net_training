@@ -1,0 +1,6 @@
+# default.yaml with the real auto-aim lenses' distortion on most simulator frames. Real images are distorted
+# already, so the network should see corners where a real lens puts them. Not measurable on simulator val (it is
+# baked the same way); judge it on a real or proxy-screen val session before making it the default.
+base: default.yaml
+lens:
+  prob: 0.8

@@ -1,0 +1,16 @@
+# pose_default.yaml plus online pixel-level augmentation through albumentations (AT reported a clear gain from
+# augmentation beyond Ultralytics' own; see docs). An experiment, not the default: compare it with pose_default
+# at the same data, epochs and seeds before switching.
+#
+# Only transforms that keep geometry (the keypoints) and hue (the color labels); nt.train checks the names.
+# The bake step already samples blur, noise, exposure and bloom once per baked copy; these add fresh variation
+# every epoch. ImageCompression imitates sleepy's MJPG recordings. MotionBlur keeps its kernel centred and symmetric
+# (the default shifts the content by up to 2 px, off the labeled corners); Downscale is left out for the same reason.
+base: pose_default.yaml
+albumentations:
+  - {name: MotionBlur, blur_limit: [3, 7], allow_shifted: false, direction_range: [0.0, 0.0], p: 0.15}
+  - {name: GaussianBlur, blur_limit: [3, 5], p: 0.1}
+  - {name: GaussNoise, std_range: [0.01, 0.04], p: 0.15}
+  - {name: ImageCompression, quality_range: [40, 95], p: 0.3}
+  - {name: RandomBrightnessContrast, brightness_limit: 0.15, contrast_limit: 0.15, p: 0.2}
+  - {name: RandomGamma, gamma_limit: [80, 120], p: 0.15}

@@ -74,6 +74,54 @@ class SessionTest(Base):
         self.assertEqual(meta["frames"][1]["t_s"], 0.2)
 
 
+    def sleepy_recording(self, name, n_frames, pose_lines):
+        """A sleepy-style recording: <name>.avi (MJPG) and <name>.txt with `t qw qx qy qz` lines."""
+        path = self.tmp / f"{name}.avi"
+        vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 30, (FRAME_W, FRAME_H))
+        for p in write_frames(self.tmp / f"{name}_frames", n_frames):
+            vw.write(cv2.imread(str(p)))
+        vw.release()
+        path.with_suffix(".txt").write_text("".join(ln + "\n" for ln in pose_lines))
+        return path
+
+    def test_sleepy_recording_times_and_poses_come_from_its_txt(self):
+        # the recorder dropped a frame between lines 2 and 3, which index / fps cannot know
+        lines = ["0 2 0 0 0", "0.0333 1 0 0 0", "0.1 0.7071068 0 0.7071068 0", "0.1333 1 0 0 0"]
+        path = self.sleepy_recording("rec", 4, lines)
+        meta = sess.load(sess.create(path, self.tmp / "sessions", "rec", "val", dedupe_hamming=-1))
+        self.assertEqual(meta["source"]["time_base"], "poses")
+        self.assertEqual(meta["source"]["poses"]["lines"], 4)
+        self.assertEqual([f["t_s"] for f in meta["frames"]], [0.0, 0.0333, 0.1, 0.1333])
+        self.assertEqual(meta["frames"][0]["q_wxyz"], [1.0, 0.0, 0.0, 0.0])  # normalized, as sleepy does
+        np.testing.assert_allclose(meta["frames"][2]["q_wxyz"], [0.7071068, 0, 0.7071068, 0], atol=1e-6)
+        # --start/--end use the recorder's time
+        meta = sess.load(sess.create(path, self.tmp / "sessions", "rec2", "val", start_s=0.09, dedupe_hamming=-1))
+        self.assertEqual([f["index"] for f in meta["frames"]], [2, 3])
+        # --no-poses falls back to the container frame rate
+        meta = sess.load(sess.create(path, self.tmp / "sessions", "rec3", "val", dedupe_hamming=-1, poses_path=False))
+        self.assertEqual(meta["source"]["time_base"], "fps")
+        self.assertEqual(meta["frames"][2]["t_s"], round(2 / 30, 4))
+        self.assertNotIn("q_wxyz", meta["frames"][2])
+
+    def test_sleepy_txt_that_does_not_match_the_video(self):
+        short = self.sleepy_recording("short", 4, ["0 1 0 0 0", "0.0333 1 0 0 0", "0.0667 1 0 0 0"])
+        meta = sess.load(sess.create(short, self.tmp / "sessions", "short", "val", dedupe_hamming=-1))
+        self.assertIsNone(meta["frames"][3]["t_s"])
+        self.assertTrue(any("1 frames have no time or pose" in w for w in meta["warnings"]))
+        long = self.sleepy_recording("long", 2, ["0 1 0 0 0", "0.0333 1 0 0 0", "0.0667 1 0 0 0"])
+        meta = sess.load(sess.create(long, self.tmp / "sessions", "long", "val", dedupe_hamming=-1))
+        self.assertTrue(any("truncated video" in w for w in meta["warnings"]))
+        # a killed recorder can leave half a line at the end; anywhere else a bad line would shift every frame
+        cut = self.sleepy_recording("cut", 2, ["0 1 0 0 0", "0.0333 1 0 0 0", "0.06"])
+        meta = sess.load(sess.create(cut, self.tmp / "sessions", "cut", "val", dedupe_hamming=-1))
+        self.assertTrue(any("broken last line" in w for w in meta["warnings"]))
+        for bad_lines in (["0 1 0 0 0", "oops", "0.0667 1 0 0 0"], ["0.1 1 0 0 0", "0.05 1 0 0 0"]):
+            bad = self.sleepy_recording("bad", 2, bad_lines)
+            with self.assertRaises(ValueError):
+                sess.create(bad, self.tmp / "sessions", "bad", "val", dedupe_hamming=-1)
+            self.assertFalse((self.tmp / "sessions" / "bad").exists())
+
+
 class DetectorTest(Base):
     def test_letterbox_and_both_layouts_map_back_to_frame_pixels(self):
         img = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)

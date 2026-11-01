@@ -1,11 +1,12 @@
 # Ultralytics train arguments for armor pose models. nt.train passes these through unchanged; command line
-# flags (--epochs, --batch, --workers, --device) override them. Start values, not tuned.
+# flags (--epochs, --batch, --workers, --seed, --device) override them. Sized for this 15 GB laptop; on a rented
+# GPU use pose_cloud.yaml, which only changes the data-loader workers.
 
 imgsz: 768            # integer on purpose; rect=True then gives (B, 3, 576, 768) batches for 4:3 images
 rect: true
-epochs: 40
+epochs: 100           # 40 was far from converged (sim AP50 0.646 vs 0.827 at 100); the curve flattens near 80-90
 batch: 16
-workers: 8
+workers: 2            # Ultralytics starts twice as many for validation; workers 4 (12 processes) hit 8.5 GB and OOM here
 patience: 100
 amp: true             # nt.offline replaces the AMP self-check, which would download weights
 pretrained: false     # random init keeps the 26n vs v8n comparison equal and avoids unpickling downloaded weights
@@ -15,6 +16,15 @@ val: true
 save_period: 5        # keep snapshots so a checkpoint can be picked by our own metric, not by best.pt
 seed: 0
 deterministic: false
+
+# Optimizer, pinned. Ultralytics' "auto" picks MuSGD at lr 0.01 when ceil(train images / max(batch, nbs)) x epochs
+# exceeds 10000 and AdamW otherwise, so a bigger bake or more epochs would silently change the optimizer and make
+# runs incomparable; nt.train refuses "auto". These are the values auto chose for every run up to 2026-10-31
+# (13 classes, 8100 iterations): AdamW, lr0 = 0.002 * 5 / (4 + nc), beta1 0.9, and no extra bias warmup LR.
+optimizer: AdamW
+lr0: 0.000588
+momentum: 0.9         # Adam beta1
+warmup_bias_lr: 0.0   # what auto sets for Adam; the Ultralytics default 0.1 is meant for SGD
 
 # Geometry and color are labels here: no flips (digits do not mirror), no rotation, hue stays put.
 # Scale and crop variety already come from the bake step, so the online augmentation is gentle.
@@ -32,3 +42,7 @@ translate: 0.08
 hsv_h: 0.0
 hsv_s: 0.4
 hsv_v: 0.3
+
+# Extra pixel-level augmentation through albumentations, off here so the default reproduces the baselines.
+# pose_albu.yaml switches on a color-safe list; nt.train refuses transforms that move pixels or change hue.
+albumentations: []

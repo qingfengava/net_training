@@ -40,3 +40,13 @@ distractors:
   prob: 0.3
   count: [1, 3]
   size_vs_armor: [0.3, 2.0]   # long side relative to the target armor width in pixels
+
+lens:
+  # Share of simulator frames that get a real lens's distortion (0 keeps bakes identical to the ones before this
+  # option). configs/bake/lens.yaml turns it on. The cameras are sleepy's camera_info calibrations of the 1440x1080
+  # auto-aim cameras (k1 k2 p1 p2 k3; fx fy cx cy in pixels, OpenCV pixel-centre convention).
+  prob: 0.0
+  cameras:
+    - {dist: [-0.089138, 0.114766, 0.000034, 0.000238, 0.0], k: [1814.2, 1807.4, 730.3, 529.6], size: [1440, 1080]}  # omni, dong, eg, leg
+    - {dist: [-0.06872, 0.11781, 0.000829, 0.000523, 0.0], k: [1812.6, 1810.5, 734.9, 531.8], size: [1440, 1080]}    # test, vo, wit
+  scale: [0.5, 1.5]   # multiplies the coefficients, for lenses of the same kind that were not calibrated

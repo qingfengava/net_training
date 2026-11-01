@@ -43,6 +43,9 @@ annot/**/*.bmp
 # ---- Models and export artifacts ---------------------------------------------
 # registry/ keeps model cards (json/yaml/md); the binaries stay out of git.
 exports/
+# Cloud job packs (scripts/pack_for_cloud.sh) and the results a job brings back.
+cloud/
+results/
 *.pt
 *.pth
 *.ckpt

@@ -7,6 +7,9 @@
 #   scripts/run_capped.sh 5 -- python -m nt.train --model ... --workers 2
 #
 # MemorySwapMax=0 makes the job fail fast at the cap instead of dragging the whole machine into swap.
+#
+# Without a systemd user session (a cloud container, plain SSH without lingering, Docker) the command runs
+# directly under nice, with no memory cap, and a note on stderr. NT_NO_CAP=1 does the same on purpose.
 set -euo pipefail
 
 GB=${1:?usage: run_capped.sh MEMORY_GB -- command args...}
@@ -23,4 +26,9 @@ fi
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck disable=SC1091
 . "$ROOT/scripts/env.sh"
-exec systemd-run --user --scope -q -p "MemoryMax=${GB}G" -p MemorySwapMax=0 -p CPUWeight=50 nice -n 10 "$@"
+if [[ ${NT_NO_CAP:-0} != 1 ]] && command -v systemd-run >/dev/null 2>&1 \
+        && systemd-run --user --scope -q --collect true >/dev/null 2>&1; then
+    exec systemd-run --user --scope -q -p "MemoryMax=${GB}G" -p MemorySwapMax=0 -p CPUWeight=50 nice -n 10 "$@"
+fi
+echo "run_capped: no systemd user session here, running without the ${GB} GB memory cap" >&2
+exec nice -n 10 "$@"

@@ -10,3 +10,7 @@ onnxruntime-gpu==1.23.2
 numpy==2.2.6
 opencv-python==5.0.0.93
 pyyaml==6.0.3
+# albumentations' own dependencies; albumentations itself is in requirements-nodeps.in.
+pydantic==2.14.1
+stringzilla==3.12.6
+simsimd==6.5.16

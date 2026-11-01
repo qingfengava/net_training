@@ -9,7 +9,10 @@ sleepy does at run time), and write the image plus its label. Labels are mapped 
 scale, in the "edge" pixel convention, so a corner stays on the same physical point. Armors the ROI cuts
 ambiguously make the ROI be drawn again.
 
-Lens distortion is not applied yet: the simulator renders a pinhole camera and the real intrinsics are unknown.
+The simulator renders a pinhole camera. With `lens.prob` > 0 a share of the simulator frames gets the lens
+distortion of one of the real auto-aim cameras (sleepy's camera_info calibrations) at native resolution, before the
+ROI: the image is resampled through the inverse distortion and every corner label goes through the forward model,
+so both describe the same distorted view (see apply_lens). Real frames are never distorted again.
 
 Output (never overwrites):
     data.yaml  bake_manifest.json  meta.jsonl  images/{train,val}/*.png  labels/{train,val}/*.txt
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import dataclasses
 import hashlib
 import json
 import math
@@ -58,7 +62,12 @@ def _merge(base: dict, over: dict, path: str = "") -> dict:
 
 
 def load_config(path: Path | str | None = None, override: dict | None = None) -> dict:
-    cfg = yaml.safe_load(Path(path or DEFAULT_CONFIG).read_text())
+    """A bake config, or a small one with `base: other.yaml` whose keys override (and must exist in) the base."""
+    path = Path(path or DEFAULT_CONFIG)
+    cfg = yaml.safe_load(path.read_text())
+    base = cfg.pop("base", None)
+    if base:
+        cfg = _merge(load_config(path.parent / base), cfg)
     if override:
         cfg = _merge(cfg, override)
     w, h = cfg["size"]
@@ -211,6 +220,81 @@ def apply_effects(img: np.ndarray, rng, cfg: dict) -> tuple[np.ndarray, dict]:
     return out, used
 
 
+# ---- lens distortion ----------------------------------------------------------------------------------------
+
+def lens_params(rng, cfg: dict, sample: Sample) -> dict | None:
+    """Which real camera's distortion this frame gets, or None. Draws nothing from rng when lens.prob is 0, so
+    bakes without lens distortion stay identical to the ones made before this option existed."""
+    lens = cfg["lens"]
+    if not lens["prob"] or sample.source != "sim":
+        return None
+    if sample.camera is not None and any(abs(v) > 0 for v in (sample.camera.dist or [])):
+        return None  # already a distorted (real) image
+    if rng.random() >= lens["prob"]:
+        return None
+    cam = lens["cameras"][int(rng.integers(len(lens["cameras"])))]
+    s = float(rng.uniform(*lens["scale"]))
+    return {"camera": int(lens["cameras"].index(cam)), "dist": [float(v) * s for v in cam["dist"]], "k": cam["k"], "size": cam["size"]}
+
+
+def _lens_k(params: dict, w: int, h: int, zoom: float = 1.0) -> np.ndarray:
+    """The calibrated camera matrix scaled to this image size (OpenCV pixel-centre convention)."""
+    fx, fy, cx, cy = params["k"]
+    sx, sy = w / params["size"][0], h / params["size"][1]
+    return np.array([[fx * sx * zoom, 0, (cx + 0.5) * sx - 0.5], [0, fy * sy * zoom, (cy + 0.5) * sy - 0.5], [0, 0, 1]], np.float64)
+
+
+def _inverse(pts: np.ndarray, k_out: np.ndarray, k_in: np.ndarray, dist: np.ndarray) -> np.ndarray:
+    """Distorted output pixels (centre convention) -> the pinhole source pixels they show."""
+    return cv2.undistortPoints(pts.reshape(-1, 1, 2).astype(np.float64), k_out, dist, P=k_in).reshape(-1, 2)
+
+
+def lens_zoom(params: dict, w: int, h: int) -> float:
+    """Smallest focal-length factor >= 1 at which every output pixel maps inside the source image. Barrel
+    distortion pulls the border in; zooming in slightly avoids filling those pixels with invented content."""
+    k_in, dist = _lens_k(params, w, h), np.array(params["dist"], np.float64)
+    t = np.linspace(0, 1, 65)
+    border = np.concatenate([np.stack([t * (w - 1), np.zeros_like(t)], 1), np.stack([t * (w - 1), np.full_like(t, h - 1)], 1),
+                             np.stack([np.zeros_like(t), t * (h - 1)], 1), np.stack([np.full_like(t, w - 1), t * (h - 1)], 1)])
+
+    def inside(z):
+        src = _inverse(border, _lens_k(params, w, h, z), k_in, dist)
+        return bool(np.all((src[:, 0] >= -0.5) & (src[:, 0] <= w - 0.5) & (src[:, 1] >= -0.5) & (src[:, 1] <= h - 0.5)))
+
+    if inside(1.0):
+        return 1.0
+    lo, hi = 1.0, 1.5
+    if not inside(hi):
+        raise ValueError(f"lens distortion {params['dist']} needs more than 1.5x zoom; lower lens.scale")
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        lo, hi = (lo, mid) if inside(mid) else (mid, hi)
+    return hi
+
+
+def apply_lens(img: np.ndarray, corners: list, params: dict) -> tuple[np.ndarray, list, float]:
+    """Distort a pinhole frame and its corner labels (edge convention) the same way. Returns image, corners, zoom.
+
+    Image: every output pixel samples the source at its undistorted position (cv2.undistortPoints, round trip
+    error about 1e-4 px). Labels: the forward model (cv2.projectPoints) of the same camera. The distortion field is
+    the calibrated lens's in pixels, whatever field of view the simulator rendered.
+    """
+    h, w = img.shape[:2]
+    zoom = lens_zoom(params, w, h)
+    k_in, k_out, dist = _lens_k(params, w, h), _lens_k(params, w, h, zoom), np.array(params["dist"], np.float64)
+    ys, xs = np.mgrid[0:h, 0:w]
+    src = _inverse(np.stack([xs.ravel(), ys.ravel()], 1), k_out, k_in, dist).astype(np.float32)
+    out = cv2.remap(img, src[:, 0].reshape(h, w), src[:, 1].reshape(h, w), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    mapped = []
+    for quad in corners:
+        q = np.asarray(quad, np.float64) - 0.5  # edge -> centre convention
+        norm = np.linalg.solve(k_in, np.stack([q[:, 0], q[:, 1], np.ones(len(q))]))
+        obj = np.stack([norm[0] / norm[2], norm[1] / norm[2], np.ones(len(q))], 1)
+        d = cv2.projectPoints(obj, np.zeros(3), np.zeros(3), k_out, dist)[0].reshape(-1, 2) + 0.5
+        mapped.append([[float(x), float(y)] for x, y in d])
+    return out, mapped, zoom
+
+
 # ---- one baked image ----------------------------------------------------------------------------------------
 
 _WORKER: dict = {}
@@ -233,6 +317,11 @@ def bake_one(task: dict) -> dict:
     if img is None:
         return {"error": f"cannot read {sample.image}", "sample": sample.id}
     img_h, img_w = img.shape[:2]
+    lens = lens_params(rng, cfg, sample)
+    if lens is not None:
+        img, mapped, zoom = apply_lens(img, [a.corners for a in sample.armors], lens)
+        sample = dataclasses.replace(sample, armors=[dataclasses.replace(a, corners=c) for a, c in zip(sample.armors, mapped)])
+        lens = {"camera": lens["camera"], "dist": [round(v, 6) for v in lens["dist"]], "zoom": round(zoom, 5)}
 
     trained = [a for a in sample.armors if spec.trains(a.color) and len(a.corners) == 4]
     skipped_colors = len(sample.armors) - len(trained)
@@ -246,6 +335,8 @@ def bake_one(task: dict) -> dict:
     local_boxes = [(b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0) for b in boxes]
     clutter = draw_distractors(crop, rng, cfg, local_boxes, ref_px)
     crop, used = apply_effects(crop, rng, cfg)
+    if lens is not None:
+        used["lens"] = lens
     net = cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
     lines, armors_meta, dropped = [], [], 0

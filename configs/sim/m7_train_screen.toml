@@ -8,7 +8,9 @@ settle_frames = 4
 timeout_frames = 300
 
 [camera]
-fov_y_deg = [35.0, 55.0]
+# vertical field of view, uniform. The main auto-aim cameras (sleepy camera_info, fy about 1810 px at 1080) are about
+# 33 deg, the hero's (1040 px at 1024) about 52 deg; 35-55 before 2026-10-31 left the main lens out.
+fov_y_deg = [30.0, 55.0]
 distance_m = [1.0, 9.0]
 height_m = [0.25, 1.8]
 max_off_axis_deg = 70.0

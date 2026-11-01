@@ -52,6 +52,8 @@ Daedalus 里的装甲有两种样式，都由配置切换，代码不用改：
 
 ## 12 月官方样式公布那天
 
+下面只列和仿真有关的几步；从规格到训练、验证、上车的完整流程见 [style_day_runbook.md](style_day_runbook.md)。
+
 1. 复制一份规格文件：`cp configs/screens/rm27_hypothesis_a.toml configs/screens/rm27_official_v1.toml`。
 2. 按官方数据填写尺寸、行列数、点形状和颜色。确定的值把上下限设成一样，有公差的保留小范围。
 3. 显示内容如果不是普通数字，按编号做成位图放进一个目录（亮 = 点亮，一像素一点），在 `content.bitmap_dir` 里指向它。

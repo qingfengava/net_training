@@ -33,5 +33,9 @@ SIM_ENV=(
 
 # The simulator reads config.toml from its working directory.
 cd "$SIM_DIR"
-exec env "${SIM_ENV[@]}" systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 \
-    nice -n 10 timeout --signal=INT --kill-after=20 "$TIMEOUT" "$SIM_DIR/target/release/daedalus"
+if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope -q --collect true >/dev/null 2>&1; then
+    exec env "${SIM_ENV[@]}" systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 \
+        nice -n 10 timeout --signal=INT --kill-after=20 "$TIMEOUT" "$SIM_DIR/target/release/daedalus"
+fi
+echo "run_sim_dataset: no systemd user session here, running without the 4 GB memory cap" >&2
+exec env "${SIM_ENV[@]}" nice -n 10 timeout --signal=INT --kill-after=20 "$TIMEOUT" "$SIM_DIR/target/release/daedalus"

@@ -2,7 +2,7 @@
 
     python -m nt.session create --src VIDEO_OR_IMAGE_DIR --name NAME --role train|val|hard|neg \\
         [--camera sleepy.yaml|camera.json] [--camera-key KEY] [--every N] [--start S] [--end S] [--max N] \\
-        [--dedupe-hamming H] [--notes TEXT] [--root sessions]
+        [--dedupe-hamming H] [--poses FILE.txt | --no-poses] [--notes TEXT] [--root sessions]
     python -m nt.session show sessions/NAME
 
 A session is one recording (or one folder of stills) from one camera setup. Frames of a session are strongly
@@ -13,10 +13,15 @@ correlated, so the whole session gets one role and is never split between traini
     neg     frames that must stay empty (field LED screens, monitors, light-bar modules); every detection is an error
 
 sessions/<name>/
-    session.json   source file and its hash, role, camera intrinsics, frame list with time stamps and image stats
+    session.json   source file and its hash, role, camera intrinsics, frame list with time stamps, gimbal
+                   orientation (sleepy recordings) and image stats
     frames/        <name>_<index>.png for video sources; stills keep their own format so a JPEG stays visibly lossy
 
 Sessions are immutable like datasets: the directory is built next to its destination and renamed at the end.
+A sleepy recording (record.enable in a sleepy config) is <time>.avi plus <time>.txt with `t qw qx qy qz` per frame.
+The .txt next to a video is read by default: each frame's t_s and q_wxyz (gimbal orientation in gimbal_odom) come
+from it, and --start/--end refer to that time; without it t_s is index / container fps.
+
 Videos are decoded with OpenCV. A lossy source codec (H.264, MJPEG, ...) is recorded as a warning, because
 compression blurs the dot-matrix detail the network has to learn; record losslessly when you can.
 """
@@ -112,6 +117,38 @@ def load_camera(path: Path, key: str | None = None) -> tuple[Camera, tuple[int, 
     return Camera(k[0], k[4], k[2], k[5], (dist + [0.0] * 5)[:5]), size, f"{path}:{where}"
 
 
+def load_poses(path: Path) -> tuple[list[tuple[float, list[float]]], list[str]]:
+    """sleepy's recorder file: line i belongs to video frame i and reads `t qw qx qy qz`, with t in seconds since
+    the recording started and q the gimbal orientation in gimbal_odom at that frame (src/utils/io/recorder.cpp).
+
+    sleepy's own reader skips a line it cannot parse, which would pair every later frame with the wrong line;
+    here any bad line is an error, except a broken last line, which a killed recorder leaves behind.
+    Quaternions are normalized as sleepy does on load. Returns the (t, [w, x, y, z]) rows and warnings.
+    """
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    rows, warnings = [], []
+    for n, ln in enumerate(lines, 1):
+        try:
+            vals = [float(v) for v in ln.split()]
+            if len(vals) != 5 or not all(np.isfinite(vals)):
+                raise ValueError
+            q = np.array(vals[1:], np.float64)
+            norm = float(np.linalg.norm(q))
+            if norm < 1e-6:
+                raise ValueError
+        except ValueError:
+            if n == len(lines):
+                warnings.append(f"{path.name}: dropped a broken last line {n}")
+                break
+            raise ValueError(f"{path}: line {n} is not 't qw qx qy qz': {ln!r}") from None
+        if rows and vals[0] < rows[-1][0]:
+            raise ValueError(f"{path}: line {n} goes back in time ({vals[0]} after {rows[-1][0]})")
+        rows.append((vals[0], [round(float(v), 7) for v in q / norm]))
+    if not rows:
+        raise ValueError(f"{path}: no pose lines")
+    return rows, warnings
+
+
 def _frame_stats(img: np.ndarray) -> dict:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     return {"sharpness": round(float(cv2.Laplacian(gray, cv2.CV_64F).var()), 2), "brightness": round(float(gray.mean()), 2)}
@@ -146,7 +183,9 @@ def create(
     max_frames: int = 0,
     dedupe_hamming: int | None = None,
     notes: str = "",
+    poses_path: Path | None | bool = None,
 ) -> Path:
+    """poses_path: sleepy's recorder file for a video; None looks for <video>.txt next to it, False ignores it."""
     if not NAME_RE.match(name):
         raise ValueError(f"session name {name!r}: use letters, digits, '_' and '-'")
     if role not in SESSION_ROLES:
@@ -170,6 +209,9 @@ def create(
             warnings.append(f"stills are {', '.join(lossy)} (lossy)")
         frames_in = ((i, p) for i, p in enumerate(files))
         fps = None
+        if poses_path:
+            raise ValueError("--poses goes with a video source")
+        poses = None
     else:
         cap = cv2.VideoCapture(str(src))
         if not cap.isOpened():
@@ -183,6 +225,15 @@ def create(
         if codec not in LOSSLESS_CODECS:
             warnings.append(f"source codec {codec!r} is lossy: compression blurs dot-matrix detail")
         frames_in = _iter_video(src)
+        if poses_path is None and src.with_suffix(".txt").exists():
+            poses_path = src.with_suffix(".txt")
+        poses = None
+        if poses_path:
+            poses, pose_warnings = load_poses(Path(poses_path))
+            warnings += pose_warnings
+            source["poses"] = {"path": str(Path(poses_path).resolve()), "sha256": _sha256(Path(poses_path)), "lines": len(poses),
+                               "format": "sleepy recorder: t qw qx qy qz, gimbal orientation in gimbal_odom"}
+    source["time_base"] = "poses" if poses else ("fps" if fps else None)
 
     camera, calib_size, camera_desc = (None, None, None)
     if camera_path is not None:
@@ -195,11 +246,21 @@ def create(
         shutil.rmtree(tmp)
     (tmp / "frames").mkdir(parents=True)
     kept, dropped_dupes, size, last_hash = [], 0, None, None
+    decoded, stopped_early, no_pose = 0, False, 0
     try:
         for idx, item in frames_in:
-            t = idx / fps if fps else None
+            decoded = idx + 1
+            q = None
+            if poses is not None:
+                # frame times come from the recorder: the container frame rate is nominal and the recorder drops
+                # frames when its writer is busy, so index / fps drifts from the real time
+                t, q = poses[idx] if idx < len(poses) else (None, None)
+                no_pose += idx >= len(poses)
+            else:
+                t = idx / fps if fps else None
             if t is not None and (t < start_s or (end_s is not None and t > end_s)):
                 if end_s is not None and t > end_s:
+                    stopped_early = True
                     break
                 continue
             if idx % every:
@@ -226,11 +287,17 @@ def create(
                 image = f"frames/{fid}.png"
                 cv2.imwrite(str(tmp / image), img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
             kept.append({"id": fid, "index": idx, "t_s": None if t is None else round(t, 4), "image": image,
-                         "dhash": f"{int(h):016x}", **_frame_stats(img)})
+                         "dhash": f"{int(h):016x}", **({"q_wxyz": q} if q is not None else {}), **_frame_stats(img)})
             if max_frames and len(kept) >= max_frames:
+                stopped_early = True
                 break
         if not kept:
             raise ValueError("no frames selected; check --start/--end/--every")
+        if poses is not None:
+            if no_pose:
+                warnings.append(f"the pose file has {len(poses)} lines but the video goes on: {no_pose} frames have no time or pose")
+            elif not stopped_early and decoded < len(poses):
+                warnings.append(f"the pose file has {len(poses)} lines but the video only {decoded} frames (truncated video?)")
         h_px, w_px = size
         if calib_size is not None and calib_size != (w_px, h_px):
             raise ValueError(f"camera was calibrated at {calib_size[0]}x{calib_size[1]} but frames are {w_px}x{h_px}")
@@ -277,6 +344,9 @@ def main() -> None:
     c.add_argument("--max", type=int, default=0, help="stop after N kept frames")
     c.add_argument("--dedupe-hamming", type=int, default=None,
                    help="drop a frame whose dHash is within H bits of the previous kept one (-1 keeps all; default from label_spec)")
+    c.add_argument("--poses", type=Path, default=None,
+                   help="sleepy recorder file (t qw qx qy qz per frame); default: <video>.txt next to the video if it exists")
+    c.add_argument("--no-poses", action="store_true", help="ignore <video>.txt and time frames by the container frame rate")
     c.add_argument("--notes", default="")
     c.add_argument("--root", type=Path, default=ROOT / "sessions")
     s = sub.add_parser("show", help="summarize a session")
@@ -286,15 +356,16 @@ def main() -> None:
     if args.cmd == "create":
         args.root.mkdir(parents=True, exist_ok=True)
         out = create(args.src, args.root, args.name, args.role, args.camera, args.camera_key, args.every, args.start,
-                     args.end, args.max, args.dedupe_hamming, args.notes)
+                     args.end, args.max, args.dedupe_hamming, args.notes, False if args.no_poses else args.poses)
         meta = load(out)
-        print(f"wrote {out}: {len(meta['frames'])} frames, role {meta['role']}")
+        print(f"wrote {out}: {len(meta['frames'])} frames, role {meta['role']}, time base {meta['source'].get('time_base')}")
         for w in meta["warnings"]:
             print(f"  warning: {w}")
         return
     meta = load(args.session)
     sharp = [f["sharpness"] for f in meta["frames"]]
-    print(json.dumps({k: meta[k] for k in ("name", "role", "width", "height", "camera_source", "selection", "warnings", "notes")},
+    print(json.dumps({k: meta[k] for k in ("name", "role", "width", "height", "camera_source", "selection", "warnings", "notes")}
+                     | {"time_base": meta["source"].get("time_base"), "poses": meta["source"].get("poses")},
                      indent=2, ensure_ascii=False))
     print(f"frames: {len(meta['frames'])}, sharpness p10/p50/p90 {np.percentile(sharp, 10):.0f}/{np.percentile(sharp, 50):.0f}/{np.percentile(sharp, 90):.0f}")
     sys.exit(0)

@@ -1,0 +1,6 @@
+# Installed with --no-deps by scripts/setup_env.sh. albumentations and albucore require opencv-python-headless,
+# which would install a second cv2 package over opencv-python (Ultralytics needs that one) and break it when either
+# is removed; with the GUI build present both work. Their other dependencies are pinned in requirements.in.
+# `pip check` therefore reports opencv-python-headless as missing; that is expected.
+albumentations==2.0.8
+albucore==0.0.24

@@ -7,4 +7,5 @@ mkdir -p "$NT_ROOT/.yolo_config"
 export YOLO_CONFIG_DIR="$NT_ROOT/.yolo_config"
 export YOLO_OFFLINE=true       # skips the DNS online check and every AutoUpdate/download path
 export YOLO_AUTOINSTALL=false  # never pip install behind our back; versions come from requirements.lock
+export NO_ALBUMENTATIONS_UPDATE=1  # albumentations asks PyPI for a newer version on import otherwise
 export PYTHONPATH="$NT_ROOT${PYTHONPATH:+:$PYTHONPATH}"

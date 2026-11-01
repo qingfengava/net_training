@@ -165,5 +165,69 @@ class PiecesTest(unittest.TestCase):
         self.assertEqual([split_of(i, 0.1) for i in ids[:50]], [split_of(i, 0.1) for i in ids[:50]])
 
 
+
+class LensTest(unittest.TestCase):
+    """The distorted image and the mapped labels must describe the same view."""
+
+    CAM = load_config()["lens"]["cameras"][0]
+
+    def params(self, scale=1.0):
+        return {"camera": 0, "dist": [v * scale for v in self.CAM["dist"]], "k": self.CAM["k"], "size": self.CAM["size"]}
+
+    def test_a_bright_dot_lands_where_its_label_goes(self):
+        from nt.bake import apply_lens
+
+        img = np.zeros((1080, 1440, 3), np.uint8)
+        dots = [(20, 15), (700, 520), (1400, 1050), (1100, 80), (60, 900)]
+        for x, y in dots:
+            img[y - 2:y + 3, x - 2:x + 3] = 255  # 5x5 block centred on pixel (x, y): its centre is (x + .5, y + .5)
+        for scale in (1.0, 1.5):
+            out, mapped, zoom = apply_lens(img, [[[x + 0.5, y + 0.5] for x, y in dots]], self.params(scale))
+            self.assertGreater(zoom, 1.0)  # barrel distortion: zoomed in so no border pixel is invented
+            g = out[..., 0].astype(np.float64)
+            moved = 0.0
+            for (x, y), (mx, my) in zip(dots, mapped[0]):
+                ys, xs = np.mgrid[int(my) - 12:int(my) + 13, int(mx) - 12:int(mx) + 13]
+                ys, xs = np.clip(ys, 0, 1079), np.clip(xs, 0, 1439)
+                w = g[ys, xs]
+                c = np.array([(xs * w).sum() / w.sum() + 0.5, (ys * w).sum() / w.sum() + 0.5])
+                self.assertLess(np.abs(c - [mx, my]).max(), 0.15, (scale, x, y))
+                moved = max(moved, abs(mx - x - 0.5), abs(my - y - 0.5))
+            # these lenses are mild: about 1.5% at the corners, mostly undone by the zoom; still not a no-op
+            self.assertGreater(moved, 1.0)
+
+    def test_off_by_default_and_never_for_real_or_already_distorted_frames(self):
+        from nt.bake import lens_params
+        from nt.canonical import Camera, Sample
+
+        sim = Sample("s", "x.png", 1440, 1080, "sim", camera=Camera(1000, 1000, 720, 540))
+        rng = np.random.default_rng(0)
+        state = rng.bit_generator.state
+        self.assertIsNone(lens_params(rng, load_config(), sim))
+        self.assertEqual(rng.bit_generator.state, state)  # nothing drawn: old bakes stay bit-identical
+        on = load_config(Path(__file__).resolve().parents[1] / "configs" / "bake" / "lens.yaml")
+        self.assertEqual(on["lens"]["prob"], 0.8)
+        hits = sum(lens_params(np.random.default_rng(i), on, sim) is not None for i in range(200))
+        self.assertTrue(130 < hits < 190, hits)
+        real = Sample("r", "x.png", 1440, 1080, "real", camera=Camera(1000, 1000, 720, 540))
+        distorted = Sample("d", "x.png", 1440, 1080, "sim", camera=Camera(1000, 1000, 720, 540, [-0.1, 0, 0, 0, 0]))
+        for s in (real, distorted):
+            self.assertIsNone(lens_params(np.random.default_rng(0), {"lens": {**on["lens"], "prob": 1.0}}, s))
+
+    def test_bake_with_lens_keeps_labels_on_the_plate(self):
+        canon = make_canonical(Path(self._tmp.name), n=2)
+        m = bake([(canon, 1)], Path(self._tmp.name) / "b", SPEC, load_config(override={"lens": {"prob": 1.0},
+                 "roi": {"full_frame_prob": 1.0}, "distractors": {"prob": 0.0}}), 1, 0, 1, str(SPEC_PATH))
+        metas = [json.loads(ln) for ln in (Path(self._tmp.name) / "b" / "meta.jsonl").read_text().splitlines()]
+        self.assertTrue(all("lens" in mm["effects"] for mm in metas))
+        self.assertEqual(sum(m["images"].values()), 2)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
