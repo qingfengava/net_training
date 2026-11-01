@@ -1,6 +1,7 @@
 """Export a trained pose model to the ONNX contract sleepy's AT decoder reads.
 
-    python -m nt.export --weights runs/train/NAME/weights/best.pt --out exports/NAME [--opset 17]
+    python -m nt.export --weights runs/train/NAME/weights/best.pt --out exports/NAME [--opset 17] [--heads]
+    python -m nt.export --split exports/NAME            (add the head split to an existing export)
 
 Output tensor [1, 30, 18], one row per detection:
     0..3   box x1, y1, x2, y2 in network-input pixels
@@ -16,6 +17,15 @@ exports the stock end-to-end graph (or NMS inside the graph for non-end-to-end m
 table (number and color slot) and drop the visibility columns, so the
 decoder needs no change and the model keeps one export path. A contract.json is written next to the model
 and embedded in the ONNX metadata under `nt_contract`; nt.contract checks both.
+
+--heads (or --split on an existing export) also cuts model.onnx at the 9 detection-head convolutions, for NPUs
+that quantize every tensor (RKNN): model_heads.onnx runs from the image to the 9 head outputs (box, class and
+keypoint maps per stride, each its own tensor, so each gets its own quantization scale), and decode.onnx runs
+from those 9 tensors to the same [1, 30, 18] output (grid decode, sigmoid, top-k, class remap) on the CPU in
+float. In a quantized model whose head outputs carry a Q/DQ pair (nt.quant rknn, nt.train --qat rknn) the cut
+is after that pair, so the 8-bit scale stays with the NPU part and decode.onnx has no Q/DQ.
+decode(heads(x)) equals model(x); the split is checked on export and described in split.json (head
+tensor names, kind, stride, shape) and in each file's `nt_split` metadata. docs/rknn_int8_qat_notes.md explains why the cut belongs there.
 """
 from __future__ import annotations
 
@@ -120,7 +130,80 @@ def append_remap(model, spec: LabelSpec):
     return model
 
 
-def export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int = 17, device: str = "cpu") -> Path:
+def _is_quantized_conv_output(n, producer: dict) -> bool:
+    """DequantizeLinear(QuantizeLinear(Conv output)): a head output that the model rounds to 8 bits."""
+    q = producer.get(n.input[0]) if n.op_type == "DequantizeLinear" else None
+    return q is not None and q.op_type == "QuantizeLinear" and getattr(producer.get(q.input[0]), "op_type", None) == "Conv"
+
+
+def head_tensors(model) -> list[str]:
+    """The detection-head outputs: the last Conv outputs before the graph output (no Conv after them). When the
+    model quantizes such an output (rknn PTQ or QAT), the cut goes after its Q/DQ pair, so the NPU part keeps the
+    output's 8-bit scale."""
+    g = model.graph
+    producer = {o: n for n in g.node for o in n.output}
+    heads, stack, seen = [], [g.output[0].name], set()
+    while stack:
+        t = stack.pop()
+        if t in seen or t not in producer:
+            continue
+        seen.add(t)
+        n = producer[t]
+        if n.op_type == "Conv" or _is_quantized_conv_output(n, producer):
+            heads.append(t)
+        else:
+            stack.extend(n.input)
+    return sorted(heads)
+
+
+def _head_info(name: str, shape: list[int]) -> dict:
+    kind = "box" if "cv2" in name else "cls" if "cv3" in name else "kpt" if "cv4" in name else "?"
+    return {"name": name, "kind": kind, "stride": IMG_H // shape[2] if len(shape) == 4 and shape[2] else None, "shape": shape}
+
+
+def split_at_heads(model_path: Path) -> dict:
+    """Write model_heads.onnx and decode.onnx next to model_path, check them, and record the split."""
+    import onnx
+    import onnxruntime as ort
+
+    out_dir = model_path.parent
+    model = onnx.load(str(model_path))
+    heads = head_tensors(model)
+    if len(heads) != 9:
+        raise RuntimeError(f"expected 9 head convolutions, found {len(heads)}: {heads}")
+    inferred = onnx.shape_inference.infer_shapes(model)
+    shapes = {v.name: [d.dim_value for d in v.type.tensor_type.shape.dim] for v in inferred.graph.value_info}
+    in_name, out_name = model.graph.input[0].name, model.graph.output[0].name
+    heads_path, decode_path = out_dir / "model_heads.onnx", out_dir / "decode.onnx"
+    onnx.utils.extract_model(str(model_path), str(heads_path), [in_name], heads)
+    onnx.utils.extract_model(str(model_path), str(decode_path), heads, [out_name])
+
+    rng = np.random.default_rng(0)
+    full = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    npu = ort.InferenceSession(str(heads_path), providers=["CPUExecutionProvider"])
+    cpu = ort.InferenceSession(str(decode_path), providers=["CPUExecutionProvider"])
+    for _ in range(2):
+        x = rng.random((1, 3, IMG_H, IMG_W), dtype=np.float32)
+        h = npu.run(None, {in_name: x})
+        y = cpu.run(None, dict(zip(heads, h)))[0]
+        ref = full.run(None, {in_name: x})[0]
+        if not np.allclose(y, ref, atol=1e-4):
+            raise RuntimeError(f"decode(heads(x)) differs from the model by {float(np.abs(y - ref).max())}")
+    split = {"npu": heads_path.name, "cpu": decode_path.name, "heads": [_head_info(n, shapes.get(n, [])) for n in heads],
+             "note": "run npu on the image, feed its 9 outputs by name to cpu; cpu output == model.onnx output"}
+    for path in (heads_path, decode_path):
+        m = onnx.load(str(path))
+        entry = m.metadata_props.add()
+        entry.key, entry.value = "nt_split", json.dumps({"part": path.stem, **split}, sort_keys=True)
+        onnx.save(m, str(path))
+    # beside contract.json, not inside it: the contract describes model.onnx and must match its embedded copy
+    (out_dir / "split.json").write_text(json.dumps(split, indent=2, sort_keys=True) + "\n")
+    return split
+
+
+def export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int = 17, device: str = "cpu", heads: bool = False,
+           simplify: bool | None = None) -> Path:
+    """simplify None: onnxslim on, unless the model carries fake-quant modules (QAT), whose weight Q/DQ it would fold."""
     import onnx
     from nt import offline
 
@@ -131,13 +214,16 @@ def export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int = 17, devic
         raise FileExistsError(f"{out_dir} is not empty; exports are never overwritten")
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        return _export(weights, out_dir, spec, opset, device)
+        path = _export(weights, out_dir, spec, opset, device, simplify)
+        if heads:
+            split_at_heads(path)
+        return path
     except BaseException:
         shutil.rmtree(out_dir, ignore_errors=True)  # a failed export leaves nothing half-written
         raise
 
 
-def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: str) -> Path:
+def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: str, simplify: bool | None = None) -> Path:
     import onnx
     from ultralytics import YOLO
 
@@ -148,11 +234,16 @@ def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: s
         shutil.copy2(weights, local)
         model = YOLO(str(local), task="pose")
         e2e = bool(getattr(model.model, "end2end", False))
+        from nt import qat
+
+        quantized = qat.is_quantized(model.model)
+        if simplify is None:
+            simplify = not quantized
         cwd = os.getcwd()
         os.chdir(tmp)
         try:
             stock = Path(model.export(format="onnx", imgsz=[IMG_H, IMG_W], batch=1, half=False, dynamic=False,
-                                      simplify=True, opset=opset, max_det=MAX_DET, nms=not e2e, device=device, verbose=False))
+                                      simplify=simplify, opset=opset, max_det=MAX_DET, nms=not e2e, device=device, verbose=False))
         finally:
             os.chdir(cwd)
         stock = Path(tmp) / stock.name if not stock.is_absolute() else stock
@@ -167,6 +258,7 @@ def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: s
         "weights_sha256": hashlib.sha256(Path(weights).read_bytes()).hexdigest() if Path(weights).exists() else None,
         "end_to_end": e2e,
         "opset": opset,
+        **({"quantization": qat.describe(model.model)} if quantized else {}),
     }
     contract = contract_for(spec, source)
     entry = proto.metadata_props.add()
@@ -179,12 +271,20 @@ def _export(weights: Path, out_dir: Path, spec: LabelSpec, opset: int, device: s
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--weights", type=Path, required=True)
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--weights", type=Path)
+    ap.add_argument("--out", type=Path)
     ap.add_argument("--opset", type=int, default=17)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--heads", action="store_true", help="also write model_heads.onnx + decode.onnx (RKNN-style split)")
+    ap.add_argument("--split", type=Path, help="an existing export directory: only add the head split")
     args = ap.parse_args()
-    path = export(args.weights, args.out, LabelSpec.load(), args.opset, args.device)
+    if args.split:
+        split = split_at_heads(args.split / "model.onnx")
+        print(f"wrote {args.split / split['npu']} and {args.split / split['cpu']}; decode(heads(x)) == model(x)")
+        return
+    if not args.weights or not args.out:
+        ap.error("--weights and --out are required unless --split is given")
+    path = export(args.weights, args.out, LabelSpec.load(), args.opset, args.device, args.heads)
     print(f"wrote {path}")
 
 

@@ -296,6 +296,28 @@ class ReplayTest(Base):
         tracks = replay.link_tracks([[d], [d], [], [d]])
         self.assertEqual([len(t) for t in tracks], [3])
 
+    def test_expected_number_session_counts_every_other_output_as_an_error(self):
+        from nt.detector import Detection
+
+        plate = np.array(PLATE_FRAME, np.float64)
+        red3, blue3, red4 = (Detection(0.9, 1, 3, plate), Detection(0.9, 0, 3, plate), Detection(0.9, 1, 4, plate))
+        off = Detection(0.9, SPEC.off_class[0], SPEC.off_class[1], plate)
+        dets = [[red3], [red3], [red4], [red3], [blue3], [off], [], [red3]]
+        tracks = replay.link_tracks(dets)
+        e = replay.expected_stats(dets, tracks, SPEC, 3, 1)
+        self.assertEqual((e["detections"], e["correct"], e["wrong_number"], e["wrong_color"], e["off_class"]), (7, 4, 1, 1, 1))
+        self.assertAlmostEqual(e["error_rate"], 3 / 7, places=4)
+        self.assertEqual((e["frames_with_an_error"], e["frames_with_the_expected_armor"]), (3, 4))
+        # tracks link same-color detections: red 3/3/4/3 is one track (majority red 3, right); the blue 3 and the
+        # off detection are tracks of their own, and both are wrong
+        self.assertEqual((e["tracks"], e["tracks_whose_majority_is_wrong"]), (len(tracks), 2))
+        # without a color, a blue 3 is right
+        self.assertEqual(replay.expected_stats(dets, tracks, SPEC, 3, None)["wrong_color"], 0)
+        self.assertEqual(replay.parse_expected(SPEC, "three", "red"), (3, 1))
+        self.assertEqual(replay.parse_expected(SPEC, "3", None), (3, None))
+        with self.assertRaises(SystemExit):
+            replay.parse_expected(SPEC, "two", None)  # RM27 has no robot 2
+
 
 if __name__ == "__main__":
     unittest.main()

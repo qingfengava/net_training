@@ -11,6 +11,10 @@ and configs/geometry.yaml. Reported, per session and per track:
     jitter       frame-to-frame change of distance (% of distance) and of plate yaw and pitch (deg), as
                  median and p95; "yaw jumps" count changes above --yaw-jump, the typical PnP ambiguity flip
     negatives    for a session with role neg every detection is a false positive: count and rate per minute
+    expected     with --expect: the session shows only armors with that number (and --expect-color), e.g. one robot
+                 whose screens all show 3, so every other output is an error without any labeling: the share of
+                 detections with another number, another color or the off class, per frame and per track
+                 (majority vote). The video must not show other robots, outposts or bases.
 Jitter mixes target motion with estimation noise, so compare models on the same session, not across sessions.
 Use dense sessions (`nt.session create --every 1`); with a stride the frame-to-frame numbers mostly measure
 motion. Without intrinsics only continuity and negatives are computed.
@@ -116,8 +120,59 @@ def _wrap(a: float) -> float:
     return (a + 180.0) % 360.0 - 180.0
 
 
+def parse_expected(spec: LabelSpec, label: str | None, color: str | None) -> tuple[int | None, int | None]:
+    """'3' or 'three', and 'red' or '1', to the label id and color slot; None stays None."""
+    def one(text, table, what):
+        if text is None:
+            return None
+        names = {str(v).lower(): k for k, v in table.items()}
+        if text.lower() in names:
+            return names[text.lower()]
+        if text.lstrip("-").isdigit() and int(text) in table:
+            return int(text)
+        raise SystemExit(f"--expect{'-color' if what == 'color' else ''} {text!r}: one of {sorted(map(str, table.values()))}")
+    return one(label, dict(spec.labels), "label"), one(color, dict(spec.colors), "color")
+
+
+def expected_stats(dets: list[list[Detection]], tracks: list[list[tuple[int, int]]], spec: LabelSpec,
+                   label: int, color: int | None) -> dict:
+    """Errors against a known number (and color) when the whole session shows only that armor."""
+    def kind(d: Detection) -> str:
+        if spec.is_off(d.color):
+            return "off_class"
+        if d.label != label:
+            return "wrong_number"
+        if color is not None and d.color != color:
+            return "wrong_color"
+        return "correct"
+    counts = Counter(kind(d) for ds in dets for d in ds)
+    n = sum(counts.values())
+    wrong = n - counts["correct"]
+    frames_with = sum(1 for ds in dets if ds)
+    frames_wrong = sum(1 for ds in dets if any(kind(d) != "correct" for d in ds))
+    frames_right = sum(1 for ds in dets if any(kind(d) == "correct" for d in ds))
+    track_votes = []
+    for t in tracks:
+        votes = Counter((dets[k][j].color, dets[k][j].label) for k, j in t)
+        (c, l), _ = votes.most_common(1)[0]
+        track_votes.append(Detection(1.0, c, l, np.zeros((4, 2))))
+    tracks_wrong = sum(1 for d in track_votes if kind(d) != "correct")
+    by_class = Counter(spec.pair_name(d.color, d.label) for ds in dets for d in ds if kind(d) != "correct")
+    return {
+        "label": spec.number_name(label), "color": None if color is None else spec.colors[color],
+        "detections": n, "correct": counts["correct"], "wrong_number": counts["wrong_number"],
+        "wrong_color": counts["wrong_color"], "off_class": counts["off_class"],
+        "error_rate": round(wrong / n, 5) if n else None,
+        "frames": len(dets), "frames_with_detections": frames_with,
+        "frames_with_the_expected_armor": frames_right, "frames_with_an_error": frames_wrong,
+        "tracks": len(tracks), "tracks_whose_majority_is_wrong": tracks_wrong,
+        "wrong_outputs_by_class": dict(by_class.most_common()),
+    }
+
+
 def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict, conf: float, tiles: int, yaw_jump: float,
-           min_track: int = 5) -> tuple[dict, list[dict], list[list[tuple[int, int]]], list[list[Detection]], list[list[dict | None]]]:
+           min_track: int = 5, expect: tuple[int | None, int | None] = (None, None)
+           ) -> tuple[dict, list[dict], list[list[tuple[int, int]]], list[list[Detection]], list[list[dict | None]]]:
     meta = sess.load(session_dir)
     frames = sorted(meta["frames"], key=lambda f: f["index"])
     camera = sess.camera_of(meta)
@@ -179,6 +234,8 @@ def replay(session_dir: Path, model: ArmorModel, spec: LabelSpec, geometry: dict
         "pnp_failures": sum(1 for ps in poses for p in ps if p is None) if K is not None else None,
         "per_track": sorted(per_track, key=lambda r: -r["frames"])[:50],
     }
+    if expect[0] is not None:
+        summary["expected"] = expected_stats(dets, long_tracks, spec, expect[0], expect[1])
     if meta["role"] == "neg":
         summary["negatives"] = {"false_positives": n_det,
                                 "per_minute": None if not duration else round(60 * n_det / duration, 2)}
@@ -221,14 +278,19 @@ def main() -> None:
     ap.add_argument("--min-track", type=int, default=5)
     ap.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--expect", default=None, help="the only number the session shows (e.g. 3 or three): count every other output")
+    ap.add_argument("--expect-color", default=None, help="with --expect: the only color it shows (blue/red)")
     args = ap.parse_args()
     spec = LabelSpec.load()
     if args.out.exists() and any(args.out.iterdir()):
         raise SystemExit(f"{args.out} is not empty")
     args.out.mkdir(parents=True, exist_ok=True)
     model = ArmorModel(args.model, device=args.device)
+    if args.expect_color and not args.expect:
+        raise SystemExit("--expect-color goes with --expect")
+    expect = parse_expected(spec, args.expect, args.expect_color)
     summary, rows, tracks, dets, poses = replay(args.session, model, spec, load_geometry(args.geometry, spec), args.conf,
-                                                args.tiles, args.yaw_jump, args.min_track)
+                                                args.tiles, args.yaw_jump, args.min_track, expect)
     (args.out / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     keys = list(dict.fromkeys(k for r in rows for k in r))  # every column, in first-seen order
     with open(args.out / "frames.csv", "w", newline="") as f:
@@ -240,6 +302,12 @@ def main() -> None:
     print(json.dumps({k: summary[k] for k in ("frames", "detections", "tracks", "jitter") if k in summary}, indent=1))
     if "negatives" in summary:
         print("negatives:", summary["negatives"])
+    if "expected" in summary:
+        e = summary["expected"]
+        print(f"expected {e['color'] or ''} {e['label']}: {e['detections']} detections, error rate {e['error_rate']} "
+              f"(wrong number {e['wrong_number']}, wrong color {e['wrong_color']}, off class {e['off_class']}); "
+              f"{e['frames_with_an_error']} of {e['frames']} frames have an error; "
+              f"{e['tracks_whose_majority_is_wrong']} of {e['tracks']} tracks are mostly wrong")
     print(f"wrote {args.out}")
 
 

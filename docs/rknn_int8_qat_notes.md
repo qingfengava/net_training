@@ -4,9 +4,10 @@
 - 第 1–3 节是在 RK3576 上测得的结果；
 - 第 4 节是对训练和导出的建议；
 - 第 5 节列出哪些结论也适用于 TensorRT；
-- 第 8 节是社区三家开源旧装甲模型的量化、训练和评估经验，以及和 net_training 实测的对照。
+- 第 8 节是社区三家开源旧装甲模型的量化、训练和评估经验，以及和 net_training 实测的对照；
+- 第 9 节是 net_training 自己的 INT8 工具（切图导出、PTQ、TensorRT INT8 评估、QAT）和用它们得到的结果。
 
-实验都用 rknn-toolkit2 2.3.2 的模拟器，只说明数值一致性，延迟没有在板上测。本仓库的文件没有改动；脚本和结果都在 `~/rm_micro_uav_swarm`（`tools/rknn_check*.py`、`log/p07/`）。
+第 1–3 节的实验都用 rknn-toolkit2 2.3.2 的模拟器，只说明数值一致性，延迟没有在板上测；脚本和结果在 `~/rm_micro_uav_swarm`（`tools/rknn_check*.py`、`log/p07/`）。第 9 节的 RKNN 结果用同一个脚本，结果放在 net_training 的 `runs/rknn/`。
 
 ## 0. 结论
 
@@ -106,7 +107,7 @@
   - 后面的解码、sigmoid、top-30 放在 CPU 上，运算量很小。
   - 不切图的话，端到端图中有 21 个算子会落到 CPU 上（ReduceMax、TopK×2、GatherElements×3 等），NPU 和 CPU 要来回切换。
   - 最终输出 [1,30,18] 里像素坐标和分数又拼在一起，整图量化会重演第 1 节的问题。
-- 这与 sleepy 的契约 v2（端到端 [1,30,18]）不同。可以考虑给 `nt.export` 加一个"只到检测头"的导出变体，并在 `contract.json` 里写明检测头张量的名字、顺序和解码方式。
+- 这与 sleepy 的契约 v2（端到端 [1,30,18]）不同。`nt.export --heads` 已经实现这个变体（第 9.1 节）：`model_heads.onnx` 给 NPU，`decode.onnx` 在 CPU 上算到同一个 [1,30,18]；检测头张量的名字、种类和 stride 写在 `split.json` 里。
 - 保持框、类别、关键点三个分支分开，不要在 NPU 部分把它们拼成一个张量。
 
 ### 4.2 训练
@@ -142,7 +143,7 @@
 
 ## 6. 适用于 TensorRT 的部分
 
-本文没有做任何 TensorRT INT8 实验。下面的判断来自量化原理，没有实测：
+TensorRT INT8 的实测在第 9.2 节（PTQ 基线和 QAT 流程检查）。下面是原来按量化原理做的判断：
 - **通用的结论：**
   - 激活按张量量化，不同物理量不要共用一个张量；
   - 解码乘数越小越好；
@@ -240,11 +241,86 @@ $py -I tools/rknn_check.py armor --onnx ~/jlu_vision_26/assets/0526.onnx --video
 
 ### 8.6 对 net_training 做 RKNN INT8 的具体启示
 
-1. **先用现有的 CoordAtt 导出做一次 PTQ 对比。** 现成的模型有 `exports/y26n_simm7_coordatt_s0`、`exports/y26n_simm7_coordatt_s1`，用第 7 节的 `rknn_check_y26.py` 跑一遍，和第 2.2 节的 C2PSA 结果比较。重点看阈值 0.5 下"仍高于阈值"的比例，C2PSA 是 87.1%。如果 CoordAtt 明显更好，RKNN 用 CoordAtt，TensorRT FP16 继续用 C2PSA。这一步不需要训练，几分钟就能跑完。
+1. **先用现有的 CoordAtt 导出做一次 PTQ 对比。** 已做（第 9.3 节）：CoordAtt 在阈值 0.5 下"仍高于阈值"为 89.1–90.5%，C2PSA 为 87.1–87.7%，关键点误差也更小，但编号一致率低 0.6–1.6 个点，浮点 AP50 也略低。差距不够大，暂不换结构，等 QAT 的结果再定。
 2. **QAT 从一开始就计划在内，按 w8a8 做。** RK3576 不支持 AT 用的 w8a16。
-3. **继续用"切到检测头、解码放 CPU"的导出方式。** AT 的做法和本文第 4.1 节一致，`nt.export` 需要加这个导出变体。
+3. **继续用"切到检测头、解码放 CPU"的导出方式。** AT 的做法和本文第 4.1 节一致，`nt.export --heads` 已经实现。
 4. **做 QAT 前先清洗数据。** 量化会放大脏数据的影响（AT 前哨站的例子）。仿真数据的标注在几何上是精确的，但"太小、太暗看不清编号却仍带着编号标签"的样本，在量化后可能更容易出问题。
-5. **用 INT8 输出选权重和阈值。** QAT 的快照要用 INT8 推理结果、按部署阈值的检测指标来挑，不能用 FP32 的 last.pt。
-6. **上板验收加上 SZU 式的单编号视频测试**（第 8.4 节）。
+5. **用 INT8 输出选权重和阈值。** QAT 的快照要用 INT8 推理结果、按部署阈值的检测指标来挑，不能用 FP32 的 last.pt。`nt.select` 现在按伪量化推理（PyTorch）给快照打分，它和 TensorRT INT8 引擎的 AP50 只差约 0.006（第 9.4 节）；最后一两个候选再导出，用 `nt.eval --backend trt-int8` 或 RKNN 模拟器复核。
+6. **上板验收加上 SZU 式的单编号视频测试**（第 8.4 节）。`nt.replay --expect 3 [--expect-color red]` 已经实现：会话里只出现这个编号时，把其他输出都算作错误，按检测、帧和轨迹统计。
 
 详细的原始摘录、帖子正文的获取方法和许可证见 net_training 的记忆文件 `community-armor-training-lessons.md`、`community-armor-model-sources.md`。许可证：AT 权重 AGPL-3.0，论坛帖子 CC BY-NC-SA 4.0，SZU 仓库 MIT。
+
+## 9. net_training 的 INT8 工具和实测（2026-11-01）
+
+### 9.1 工具
+
+| 步骤 | 命令 |
+|---|---|
+| 切图导出 | `python -m nt.export --weights W --out exports/N --heads`；给已有导出补切图：`python -m nt.export --split exports/N` |
+| PTQ | `python -m nt.quant ptq --model exports/N/model.onnx --calib-data baked/X --scheme tensorrt\|rknn --out exports/N_ptq_SCHEME` |
+| TensorRT INT8 评估 | `python -m nt.eval --weights exports/N_ptq_tensorrt/model.onnx --backend trt-int8 --reference exports/N/model.onnx --data baked/VAL` |
+| QAT | `python -m nt.train --model runs/train/N/weights/last.pt --data baked/X --name N_qat --hyp configs/train/pose_qat.yaml --qat tensorrt\|rknn [--qat-freeze 0.5]` |
+| 选快照 | `python -m nt.select runs/train/N_qat --data baked/VAL` |
+
+- **切图：** `model_heads.onnx` 从图像算到 9 个检测头输出，`decode.onnx` 从这 9 个张量算到同一个 [1,30,18]。导出时检查 decode(heads(x)) 和整图输出一致（误差 ≤1e-4）。检测头输出本身带 Q/DQ 时（rknn 方案），切点放在 Q/DQ 之后，8 位的尺度留在 NPU 那一半，`decode.onnx` 里没有 Q/DQ。
+- **PTQ：** ONNX Runtime 的 `quantize_static`，QDQ 格式，只量化 Conv 和 MatMul。默认用训练集里均匀取的 256 帧校准，验证集不参与；预处理和 sleepy 相同。
+- **TensorRT INT8：** 用 `trtexec --int8 --fp16` 按图里的 Q/DQ 建引擎（显式量化），没有 Q/DQ 的层用 FP16。结果和参照 ONNX（FP32）同时报检测指标和逐检测的差。
+- **QAT：** `nt/qat.py` 自己实现伪量化，没有用 torch.ao。量化尺度用滑动最小/最大值统计，到 `--qat-freeze` 指定的比例（默认一半轮数）后冻结；梯度用直通估计，超出截断范围的部分梯度为零。导出时这些量化器直接生成 Q/DQ，`nt.export` 会自动关掉 onnxslim，否则它会把权重的 Q/DQ 折叠成浮点。`pose_qat.yaml` 在 `pose_default.yaml` 基础上改为 10 轮，学习率降到 1/10（0.0000588），不预热，关 AMP，每轮存一个快照。
+
+量化的位置：
+
+| | 权重 | 卷积输入 | 检测头输出 |
+|---|---|---|---|
+| QAT tensorrt | int8 对称，逐输出通道；Ultralytics Conv 的 BN 先按滑动统计折叠进权重 | int8 对称，逐张量 | 浮点 |
+| QAT rknn | 同上 | uint8 非对称，逐张量 | uint8 非对称 |
+| PTQ tensorrt | int8 对称，逐输出通道 | int8 对称（MatMul 输入也量化） | 浮点 |
+| PTQ rknn | 同上 | uint8 非对称（MatMul 输入也量化） | uint8 非对称 |
+
+QAT 不量化 Concat、Upsample、Add、MaxPool、C2PSA 注意力里的 MatMul 和 Softmax，也不量化 CoordAtt 里单独的 BN（`conv1` 后面那个，没有并进 Ultralytics Conv）和解码。NPU 会按自己的规则处理这些算子，所以 QAT 模型仍要在目标平台上验收。CoordAtt 那个 BN 在导出图里留在一个已量化权重的卷积后面，在 CoordAtt 上做 QAT 之前，要先确认 RKNN 和 TensorRT 怎样处理它，或者让 `nt.qat` 也把它折叠进去。
+
+### 9.2 TensorRT INT8：PTQ 基线和 QAT 流程检查
+
+`baked/simm7_c2` 验证集（616 张图，1777 个装甲），端到端检测头，阈值 0.2，RTX 5060，TensorRT 10.15。
+
+| 模型 | AP50 | 召回 | 精确率 | 机器人编号准确率 | 熄灭类召回 | 角点 p95（原图 px） |
+|---|---|---|---|---|---|---|
+| FP32 ONNX（`y26n_simm7_e100`） | 0.827 | 0.904 | 0.751 | 0.780 | 0.752 | 6.18 |
+| PTQ（tensorrt 方案）TRT INT8 | 0.813 | 0.883 | 0.775 | 0.779 | 0.705 | 6.40 |
+| QAT 流程检查 TRT INT8 | 0.819 | 0.899 | 0.752 | 0.772 | 0.711 | 6.58 |
+
+- **PTQ 损失 1.4 个点 AP50，熄灭类召回掉 4.7 个点。** 和 FP32 逐检测对比：FP32 有、INT8 没有的检测 264 个，反过来 149 个；角点差 p95 为 1.66 网络像素，置信度差 p95 为 0.227。结果在 `runs/eval/y26n_simm7_e100_trt_int8_ptq.json`。这是 QAT 要超过的基线。
+- **QAT 流程检查不是 QAT 结果。** 它只训了 2 轮、用了 5% 的训练图（259 张），评估结果在 `runs/eval/qat_pipeline_check_trt_int8.json`，检查点没有保留。检查的是整条流程能走通：训练、导出（222 对 Q/DQ）、契约检查（含 C++ 对拍）、建 INT8 引擎、评估。它的 AP50 比 PTQ 高 0.6 个点，在这种规模下说明不了问题。
+- **同一个 QAT 模型的三种跑法结果一致。** 用第一次流程检查的模型（当时检测头输出也加了量化）比较：
+  - PyTorch 伪量化（`nt.select`）的 AP50 为 0.812；
+  - ONNX Runtime 跑导出的 QDQ 图为 0.818；
+  - TensorRT INT8 引擎为 0.818，和 ONNX Runtime 逐检测比，角点差 p50 为 0.13、p95 为 1.67 网络像素。
+- **PyTorch 和导出图不是逐位一致，原因是舍入临界值。** 逐层比较，前两层完全相同。从第 3 层开始，有少数值正好落在舍入的分界上，浮点求和顺序不同就会差一档（第 3 层只有 0.0014% 的值不同），之后逐层放大，到第 10 层约 40% 的值差 1–5 档。同一个 PyTorch 模型放在 CUDA 和 CPU 上跑，也有同样的放大过程，所以这不是导出错误。结论：伪量化推理和引擎只能在检测指标层面比较，最终选快照要用真实引擎复核。
+- **tensorrt 方案的检测头输出改为浮点。** 第一次流程检查时检测头输出也加了 int8 量化，后来改成和 PTQ tensorrt 方案、TensorRT 的推荐做法一致，保持浮点。两次检查的熄灭类召回分别是 0.752 和 0.711，精确率是 0.668 和 0.752，但只训 2 轮、5% 数据，分不出是不是这个改动造成的。如果正式 QAT 的熄灭类召回偏低，可以把这一点当作 A/B 的一项。
+
+### 9.3 RKNN PTQ：CoordAtt 和 C2PSA 对比
+
+方法和第 2 节相同：`rknn_check_y26.py`，验证集偶数号 100 张校准、奇数号 200 张测试，切到检测头。结果在 `runs/rknn/<模型>/int8_normal_conf{0.5,0.2}_result.json`。浮点 AP50 是 `nt.eval` 在整个验证集上的结果。
+
+| 模型 | 浮点 AP50 | 阈值 | FP32 检测数 | 仍高于阈值 | 编号一致 | 颜色一致 | 关键点误差 p50 / p95 | 置信度变化 p5 / p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| C2PSA（e100） | 0.827 | 0.5 | 402 | 87.1% | 0.993 | 0.998 | 0.60 / 1.71 px | −0.66 / −0.019 / +0.036 |
+| C2PSA（s1） | 0.825 | 0.5 | 390 | 87.7% | 0.990 | 1.000 | 0.46 / 1.49 px | −0.78 / −0.022 / +0.037 |
+| CoordAtt（s0） | 0.821 | 0.5 | 391 | 90.5% | 0.977 | 0.997 | 0.47 / 1.25 px | −0.65 / −0.006 / +0.059 |
+| CoordAtt（s1） | 0.797 | 0.5 | 377 | 89.1% | 0.984 | 1.000 | 0.39 / 1.23 px | −0.76 / −0.007 / +0.065 |
+| C2PSA（e100） | | 0.2 | 638 | 84.0% | 0.939 | 0.998 | 0.53 / 1.68 px | −0.46 / −0.028 / +0.061 |
+| C2PSA（s1） | | 0.2 | 637 | 79.6% | 0.923 | 1.000 | 0.41 / 1.41 px | −0.42 / −0.028 / +0.072 |
+| CoordAtt（s0） | | 0.2 | 643 | 86.0% | 0.927 | 0.997 | 0.42 / 1.22 px | −0.36 / −0.005 / +0.091 |
+| CoordAtt（s1） | | 0.2 | 658 | 88.6% | 0.912 | 1.000 | 0.35 / 1.14 px | −0.48 / −0.009 / +0.093 |
+
+- **CoordAtt 留住的检测更多。** 阈值 0.5 下"仍高于阈值"高 2–3 个点，0.2 下高 2–9 个点，两个种子都是这样。置信度变化的中位数也小：−0.006 左右，C2PSA 约 −0.02。约 400 个检测时，一个比例的标准误约 1.6 个点，阈值 0.5 下的差距在噪声边缘。
+- **关键点误差更小。** 阈值 0.5 下 p95 为 1.23–1.25 px，C2PSA 为 1.49–1.71 px。
+- **但编号一致率更低。** 阈值 0.5 下 0.977–0.984，C2PSA 为 0.990–0.993；0.2 下 0.912–0.927 对 0.923–0.939。编号错误是代价最大的错误（打错目标），这抵消了不少好处。
+- **浮点精度也略低：** AP50 0.797–0.821，C2PSA 0.825–0.827。
+
+**结论：暂不换结构，两种平台都继续用 C2PSA。** 先在 C2PSA 上做正式 QAT。如果 QAT 后在 RKNN 上仍有很多检测掉到阈值以下，再在 CoordAtt 上做 QAT 对比（先处理第 9.1 节说的那个 BN）。
+
+### 9.4 还没做的
+
+- **正式 QAT 训练。** 从收敛的 FP32 模型开始，用 `pose_qat.yaml` 训 10 轮，tensorrt 和 rknn 方案各一次。然后用 `nt.select` 挑快照，用 `nt.eval --backend trt-int8` 和 `rknn_check_y26.py` 与第 9.2、9.3 节的 PTQ 结果对比。`nt.select` 按 PyTorch 伪量化打分，它和引擎的 AP50 差约 0.006（第 9.2 节），最后一两个候选要用引擎复核。
+- **RKNN 加载 `nt.qat` 导出的 QDQ 模型。** 第 3 节只试过 ONNX Runtime 生成的 QDQ 图。`nt.qat` 导出的图用的是 PyTorch 的 `fake_quantize_*` 算子，结构不同，要用 `build(do_quantization=False)`、`optimization_level=2` 实际加载一次。
+- **上板。** 第 4.3 节第 4 步，加上用 `nt.replay --expect` 做的单编号视频测试。

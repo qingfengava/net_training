@@ -165,7 +165,7 @@ python -m nt.eval --weights exports/simoff_v1_yolo26n-pose-armor_s0/model.onnx -
 - 每个模型都要通过 C++ 对拍。不过就不能交给 sleepy。
 - 仿真验证集上的指标不应该比假设样式的模型差。假设样式模型的参考值（置信度 0.2）：AP50 0.827，类别准确率 84%，机器人编号准确率 78%，熄灭类召回 75%，角点 p95 6.2 px（原图像素）。官方规格是确定值，变化范围比假设规格窄，正常情况应该更好。
 - 结果偏低时，先查第 3 步的标注图和第 4 步的烘焙图，再考虑调训练参数。云端每一步的日志都在 `runs/cloud/<任务名>/logs/`。
-- 选权重：仿真阶段用 `last.pt`；有真实验证集以后，按真实验证集的综合指标从每 5 轮存一次的快照里挑。快照都在结果包里。
+- 选权重：仿真阶段用 `last.pt`；有真实验证集以后，按真实验证集的综合指标从每 5 轮存一次的快照里挑。快照都在结果包里。挑选用 `python -m nt.select runs/train/<训练名> --data baked/<真实验证集>`：它对每个快照跑 `nt.eval`，按加权综合分排序（默认 `ap50=1,robot_numbers=1,off_recall=0.5,corner_p95=-0.02`，用 `--score` 改），结果写到 `runs/select/<训练名>.json`。在哪个集合上挑出来的，就不要在同一个集合上报成绩，那个分数偏高。
 - 本机想复现某一步，用同样的命令加 `scripts/run_capped.sh 8 --` 前缀，workers 用 2（`pose_default.yaml` 的默认值）。
 
 ## 7. 代理屏真实验证（不用等实物）
@@ -182,7 +182,8 @@ python -m nt.proxy label --session sessions/proxy_off_3_red --proxy proxies/off_
     --dst datasets/real/proxy_off_3_red
 scripts/run_capped.sh 6 -- python -m nt.bake --src datasets/real/proxy_off_3_red --out baked/proxy_off_3_red
 python -m nt.eval --weights $W --data baked/proxy_off_3_red --out runs/eval/v1_on_proxy_off_3_red.json
-python -m nt.replay sessions/proxy_off_3_red --model exports/y26n_simoff_v1/model.onnx --out runs/replay/v1_proxy
+python -m nt.replay sessions/proxy_off_3_red --model exports/y26n_simoff_v1/model.onnx --out runs/replay/v1_proxy \
+    --expect 3 --expect-color red   # 画面里只有红 3，其他输出都算误识别
 ```
 
 - 每个编号、红蓝两色都录一段。`--role val` 的会话永远不会进训练。
@@ -199,6 +200,7 @@ python -m nt.replay sessions/proxy_off_3_red --model exports/y26n_simoff_v1/mode
 - 解码器按 `contract.json` 读取；预处理和训练一致：RGB、除以 255、双线性缩放、4:3 画面不补边。
 - 修 CUDA letterbox 的半像素偏移和补边值；推理并发数不要超过上下文数。
 - 车上电脑用 `nt.bench_trt` 测 FP16 延迟；FP16 下的精度还没有验证过，要在这一步一起确认。
+- 如果车上电脑要用 INT8（TensorRT INT8 或 RK3576 NPU），按 `docs/rknn_int8_qat_notes.md` 第 9 节做：先用 `nt.quant` 做 PTQ 基线，再用 `nt.train --qat` 做 QAT，用 `nt.eval --backend trt-int8` 或 RKNN 模拟器对比。假设样式模型的 TensorRT INT8 PTQ 会让 AP50 降 1.4 个点、熄灭类召回降 4.7 个点。
 
 上车前，先用 sleepy 的回放模式（`camera.type: replay`）把代理屏录像接回整条链路跑一遍，确认识别、跟踪、瞄准都正常。
 
@@ -212,7 +214,7 @@ python -m nt.replay sessions/proxy_off_3_red --model exports/y26n_simoff_v1/mode
   - `val`：真实验证集，换一天、换场地或换车单独录，永远不进训练；
   - `hard`：模糊、暗、遮挡；
   - `neg`：场地 LED、显示器、灯条模块、兑换站，画面里没有装甲。
-- 录一些"所有装甲都显示同一个编号"的视频：任何别的编号输出都是误识别，不用标注就能统计。
+- 录一些"所有装甲都显示同一个编号"的视频：任何别的编号输出都是误识别，不用标注就能统计。画面里不能有别的车、前哨站或基地。建成会话后用 `python -m nt.replay sessions/<会话> --model <模型> --out runs/replay/<名字> --expect 3 [--expect-color red]`，`summary.json` 的 `expected` 一项给出错误率（编号错、颜色错、误判为熄灭分开计），以及有错误的帧数、多数投票错误的轨迹数。
 
 建会话、预标注、人工审核、入库：
 

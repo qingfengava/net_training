@@ -3,6 +3,7 @@
     python -m nt.eval --weights runs/train/NAME/weights/last.pt --data baked/NAME2 [--split val] \\
         [--conf 0.2] [--head auto|e2e|nms] [--out runs/eval/NAME.json]
     python -m nt.eval --weights exports/NAME/model.onnx --backend onnx|trt-fp16|trt-fp32 --data baked/NAME2 ...
+    python -m nt.eval --weights exports/NAME_int8/model.onnx --backend trt-int8 --reference exports/NAME/model.onnx ...
 
 Every image is matched to its ground truth by corner-box IoU >= 0.5. Reported:
   * armor AP50: per class, pooled over classes present (a hit needs the right class)
@@ -23,6 +24,8 @@ TensorRT engine of that model with trtexec and run it through scripts/trt_runner
 that has the tensorrt bindings (NT_TRT_PYTHON, default /usr/bin/python3; NT_TRTEXEC, default trtexec); the same
 images also go through ONNX Runtime, and `vs_onnx` reports the paired difference: how far corners and
 confidences move by running the engine, which is what FP16 deployment does to the network's output.
+`trt-int8` builds a QDQ model (nt.quant ptq, or nt.export of an nt.train --qat run; TensorRT explicit
+quantization, the rest in FP16); give the float export as --reference so `vs_onnx` measures INT8 against FP32.
 """
 from __future__ import annotations
 
@@ -326,12 +329,15 @@ def run_onnx(model: Path, images: list[Path]):
         yield sess.run(None, {name: contract_input(p)})[0][0]
 
 
+ENGINE_FLAGS = {"fp32": [], "fp16": ["--fp16"], "int8": ["--int8", "--fp16"]}
+
+
 def build_engine(model: Path, precision: str, out: Path) -> Path:
     trtexec = os.environ.get("NT_TRTEXEC") or shutil.which("trtexec")
     if not trtexec:
         raise SystemExit("trtexec not found; set NT_TRTEXEC")
     engine = out / f"{model.parent.name}_{precision}.engine"
-    cmd = [trtexec, f"--onnx={model}", f"--saveEngine={engine}", "--skipInference"] + (["--fp16"] if precision == "fp16" else [])
+    cmd = [trtexec, f"--onnx={model}", f"--saveEngine={engine}", "--skipInference"] + ENGINE_FLAGS[precision]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         raise SystemExit(f"trtexec failed:\n{res.stdout[-1500:]}\n{res.stderr[-1500:]}")
@@ -402,7 +408,9 @@ def main() -> None:
     ap.add_argument("--conf", type=float, default=0.2)
     ap.add_argument("--sweep", default="0.3,0.5", help="further confidence thresholds to report")
     ap.add_argument("--head", choices=["auto", "e2e", "nms"], default="auto")
-    ap.add_argument("--backend", choices=["auto", "pt", "onnx", "trt-fp16", "trt-fp32"], default="auto")
+    ap.add_argument("--backend", choices=["auto", "pt", "onnx", "trt-fp16", "trt-fp32", "trt-int8"], default="auto")
+    ap.add_argument("--reference", type=Path, default=None,
+                    help="trt-*: float model for the ONNX Runtime side of vs_onnx (default --weights; give the FP32 export for INT8)")
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--device", default="0")
     ap.add_argument("--out", type=Path, default=None)
@@ -442,7 +450,8 @@ def main() -> None:
         if torch.cuda.is_available():
             report["gpu"] = torch.cuda.get_device_name(0)
     else:
-        onnx_dets = [decode_contract(o, spec, 0.001) for o in run_onnx(args.weights, images)]
+        reference = args.reference or args.weights
+        onnx_dets = [decode_contract(o, spec, 0.001) for o in run_onnx(reference if backend.startswith("trt") else args.weights, images)]
         if backend == "onnx":
             score("onnx", onnx_dets)
         else:
@@ -458,7 +467,8 @@ def main() -> None:
                   f"corner_diff_net_px p50={v['corner_diff']['net_px']['p50']} "
                   f"p95={v['corner_diff']['net_px']['p95']} max={v['corner_diff']['net_px']['max']} orig_px p95={v['corner_diff']['orig_px']['p95']} "
                   f"conf_diff p95={v['conf_diff']['p95']} max={v['conf_diff']['max']}")
-            report["engine"] = {"trtexec": os.environ.get("NT_TRTEXEC") or shutil.which("trtexec"), "precision": precision}
+            report["engine"] = {"trtexec": os.environ.get("NT_TRTEXEC") or shutil.which("trtexec"), "precision": precision,
+                                "reference": str(reference)}
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

@@ -1,0 +1,10 @@
+# Quantization-aware fine-tuning (nt.train --qat rknn|tensorrt, nt/qat.py) of an already trained .pt.
+# Starts from converged weights, so it is short and slow: a tenth of the base learning rate, no warmup, a
+# snapshot every epoch to pick the best INT8 one with nt.select. AMP is off because the fake quantizers keep
+# their ranges in float32 and fp16 rounding would move the quantization grid.
+base: pose_default.yaml
+epochs: 10
+lr0: 0.0000588
+warmup_epochs: 0.0
+amp: false
+save_period: 1

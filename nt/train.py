@@ -91,6 +91,8 @@ def main() -> None:
     ap.add_argument("--workers", type=int)
     ap.add_argument("--seed", type=int, help="weight init and data order; repeat a run with another seed to measure noise")
     ap.add_argument("--fraction", type=float, help="train on only this share of the training images (pipeline checks)")
+    ap.add_argument("--qat", choices=["rknn", "tensorrt"], help="quantization-aware fine-tuning of a trained .pt (nt/qat.py)")
+    ap.add_argument("--qat-freeze", type=float, default=0.5, help="with --qat: freeze activation ranges after this share of epochs")
     ap.add_argument("--device", default="0")
     args = ap.parse_args()
     # Ultralytics puts a relative project under runs/<task>/, so the run would land elsewhere than nt_meta.json
@@ -125,11 +127,21 @@ def main() -> None:
 
     train_args = {k: v for k, v in hyp.items() if k != "albumentations"}
     train_args["augmentations"] = build_albumentations(hyp.get("albumentations"))
+    trainer = None
+    if args.qat:
+        from nt import qat
+
+        if args.model.suffix != ".pt":
+            raise SystemExit("--qat fine-tunes trained weights: give a .pt checkpoint as --model")
+        if train_args.get("amp", True):
+            raise SystemExit("--qat needs amp: false in the hyp file (configs/train/pose_qat.yaml)")
+        trainer = qat.make_trainer(args.qat, freeze_epoch=int(round(args.qat_freeze * int(train_args["epochs"]))))
     model = YOLO(str(args.model), task="pose")
     t0 = time.time()
     status = "completed"
     try:
-        model.train(data=str(local_data), project=str(args.project), name=args.name, device=args.device, exist_ok=False, verbose=False, **train_args)
+        model.train(data=str(local_data), project=str(args.project), name=args.name, device=args.device, exist_ok=False, verbose=False,
+                    **({"trainer": trainer} if trainer else {}), **train_args)
     except BaseException as e:  # keep the metadata of an interrupted run too
         status = f"failed: {type(e).__name__}: {e}"
         raise
@@ -153,7 +165,9 @@ def main() -> None:
                      "images": json.loads(manifest.read_text()).get("images")},
             "last_metrics": last,
             "optimizer": _optimizer_of(trainer),
-        }, indent=2, sort_keys=True) + "\n")
+            "qat": None if not args.qat else {"scheme": args.qat, "freeze_share": args.qat_freeze,
+                                               "quantized": getattr(getattr(trainer, "model", None), "nt_qat", None)},
+        }, indent=2, sort_keys=True, default=str) + "\n")
 
 
 def _optimizer_of(trainer) -> dict | None:

@@ -179,6 +179,71 @@ class ExportTest(unittest.TestCase):
         for name, path in self.paths.items():
             self.assertEqual(check_model(path, SPEC, cpp=True), [], name)
 
+    def test_head_split_reproduces_the_model(self):
+        import shutil
+
+        import onnxruntime as ort
+
+        from nt.export import split_at_heads
+
+        for name, path in self.paths.items():
+            if "yolov8" in name:
+                continue  # the split is for the end-to-end YOLO26 graph
+            d = self.dir / f"split_{name}"
+            d.mkdir()
+            shutil.copy2(path, d / "model.onnx")
+            split = split_at_heads(d / "model.onnx")
+            self.assertEqual([h["kind"] for h in split["heads"]], ["box"] * 3 + ["cls"] * 3 + ["kpt"] * 3)
+            self.assertEqual([h["stride"] for h in split["heads"]], [8, 16, 32] * 3)
+            x = np.random.default_rng(3).random((1, 3, 576, 768), dtype=np.float32)
+            npu = ort.InferenceSession(str(d / split["npu"]), providers=["CPUExecutionProvider"])
+            cpu = ort.InferenceSession(str(d / split["cpu"]), providers=["CPUExecutionProvider"])
+            full = ort.InferenceSession(str(d / "model.onnx"), providers=["CPUExecutionProvider"])
+            heads = npu.run(None, {"images": x})
+            y = cpu.run(None, {h["name"]: v for h, v in zip(split["heads"], heads)})[0]
+            np.testing.assert_allclose(y, full.run(None, {"images": x})[0], atol=1e-4)
+            self.assertEqual(check_model(d / "model.onnx", SPEC), [])  # model.onnx and its contract are untouched
+
+    def test_ptq_keeps_the_decode_float(self):
+        import onnx
+
+        from nt.export import head_tensors, split_at_heads
+        from nt.quant import ptq
+
+        rng = np.random.default_rng(0)
+        imgs = []
+        for i in range(8):
+            p = self.dir / f"calib_{i}.png"
+            import cv2
+            cv2.imwrite(str(p), (rng.random((576, 768, 3)) * 255).astype(np.uint8))
+            imgs.append(p)
+        for scheme in ("tensorrt", "rknn"):
+            out = ptq(self.paths["yolo26n-pose-armor"], self.dir / f"ptq_{scheme}", imgs, scheme)
+            m = onnx.load(str(out))
+            g = m.graph
+            producer = {o: n for n in g.node for o in n.output}
+            heads = set(head_tensors(m))
+            self.assertEqual(len(heads), 9)
+            after, stack, seen = [], [g.output[0].name], set()
+            while stack:
+                name = stack.pop()
+                if name in seen or name not in producer or name in heads:
+                    continue
+                seen.add(name)
+                after.append(producer[name].op_type)
+                stack.extend(producer[name].input)
+            self.assertEqual(sum(o in ("QuantizeLinear", "DequantizeLinear") for o in after), 0, scheme)
+            # rknn quantizes the 9 head outputs themselves, so the cut is after their Q/DQ pairs; tensorrt leaves
+            # them float and the cut is at the Conv outputs
+            kinds = {producer[h].op_type for h in heads}
+            self.assertEqual(kinds, {"Conv"} if scheme == "tensorrt" else {"DequantizeLinear"}, scheme)
+            self.assertGreater(sum(n.op_type == "QuantizeLinear" for n in g.node), 50)
+            self.assertEqual(check_model(out, SPEC), [], scheme)
+            split = split_at_heads(out)  # checks decode(heads(x)) == model(x)
+            self.assertEqual(sorted(h["kind"] for h in split["heads"]), ["box"] * 3 + ["cls"] * 3 + ["kpt"] * 3)
+            decode = onnx.load(str(out.parent / split["cpu"]))
+            self.assertFalse({"QuantizeLinear", "DequantizeLinear"} & {n.op_type for n in decode.graph.node}, scheme)
+
     def test_export_refuses_a_non_empty_directory(self):
         from nt.export import export
 
