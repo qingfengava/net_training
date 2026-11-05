@@ -1,0 +1,5 @@
+# 仅验证预测 ROI 扰动；其余使用修正模糊核后的基线。
+base: default.yaml
+roi:
+  tracker:
+    prob: 1.0

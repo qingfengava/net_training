@@ -173,10 +173,11 @@ python -m nt.eval --weights exports/simoff_v1_yolo26n-pose-armor_s0/model.onnx -
 用显示器显示官方样式的点阵，用车上相机录下来，靠 ArUco 码自动标注，得到第一个真实相机下的验证集。
 
 ```bash
-python -m nt.proxy render --out proxies/off_3_red --label three --color red --text 3 \
-    --cols <官方列数> --rows <官方行数>
-# 全屏显示 proxies/off_3_red/proxy.png，sleepy 开 record.enable 录一段，换角度、距离、曝光
-python -m nt.session create --src ~/sleepy/record/auto_aim/<时间>.avi --name proxy_off_3_red \
+python -m nt.proxy render --out proxies/off_3_red --label three --color red \
+    --screen-spec configs/screens/rm27_official_v1.toml
+# 全屏显示 proxies/off_3_red/proxy.png，sleepy 开 record.enable，设 record.mode: png_sequence
+# 换角度、距离、曝光，录制目录内含 frames/、frames.jsonl 和 poses.txt
+python -m nt.session create --src ~/sleepy/record/auto_aim/<时间> --name proxy_off_3_red \
     --role val --camera ~/sleepy/config/<车>.yaml
 python -m nt.proxy label --session sessions/proxy_off_3_red --proxy proxies/off_3_red/proxy.json \
     --dst datasets/real/proxy_off_3_red
@@ -187,7 +188,8 @@ python -m nt.replay sessions/proxy_off_3_red --model exports/y26n_simoff_v1/mode
 ```
 
 - 每个编号、红蓝两色都录一段。`--role val` 的会话永远不会进训练。
-- 代理屏用的是内置 5×7 字库，和官方字形可能不同，也没有真实模块的外形。它只用来衡量"仿真训练出的模型在真实相机下掉多少"，不能代替实物。
+- 代理屏复用规格中的 PNG 图案，缺少对应 PNG 时使用文字字库；静态图案和几何与仿真器一致，但显示器亮度、刷新与真实 LED 光学不同，不能代替实物。A/B 示例及导入说明见 [PNG 采集与 A/B 代理屏](recorder_png_proxy.md)。
+- 规格毫米数只用于确定面板比例。需要 PnP 时，实测显示器上的点阵面板宽高并同步回放几何配置。
 - `--camera` 指向的配置，其内参分辨率必须和录像一致。hero.yaml 目前就对不上（相机 1440×1080，内参按 1280×1024 标定）。
 
 ## 8. 接入 sleepy、回放、上车

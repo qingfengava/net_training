@@ -1,0 +1,42 @@
+# A→B 迁移实验：七段字形、64×48 方点；类别、尺寸分布和角点语义沿用 A。
+name = "rm27_hypothesis_b"
+corner_definition = "outer edge of the dot grid (hypothesis b)"
+
+[size]
+width_mm = [108.0, 126.0]
+height_mm = [88.0, 112.0]
+offset_mm = [0.0, 0.0]
+
+[grid]
+cols = [64, 64]
+rows = [48, 48]
+dot = ["square"]
+fill = [0.45, 0.85]
+px_per_dot = 8
+
+[content]
+height = [0.65, 0.80]
+bitmap_dir = "patterns_b"
+
+[content.text]
+sentry = "S"
+one = "1"
+three = "3"
+four = "4"
+outpost = "O"
+base = "B"
+
+[light]
+nits = [0.5, 5.0]
+red = [1.0, 0.07, 0.0]
+blue = [0.0, 0.14, 1.0]
+unlit_level = [0.0, 0.05]
+dot_jitter = 0.1
+
+[states]
+off = 0.03
+robot_off = 0.06
+# 本轮沿用 A 的历史成像分布，仅比较样式迁移；不代表真实全局快门的条纹模型。
+flicker = 0.08
+flicker_level = [0.0, 0.35]
+flicker_band = [0.15, 0.6]

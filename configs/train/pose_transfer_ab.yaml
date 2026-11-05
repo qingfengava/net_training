@@ -1,0 +1,9 @@
+# 三组实验统一使用相同优化器、初始学习率和数据增强。
+base: pose_default.yaml
+optimizer: AdamW
+lr0: 0.000588
+batch: 16
+workers: 2
+seed: 0
+freeze: 0
+save_period: 5

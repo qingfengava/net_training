@@ -1,0 +1,50 @@
+{
+  "class_counts": {
+    "blue_base": 9,
+    "blue_four": 6,
+    "blue_one": 9,
+    "blue_outpost": 15,
+    "blue_sentry": 16,
+    "blue_three": 11,
+    "gray_four": 3,
+    "gray_outpost": 2,
+    "gray_three": 1,
+    "red_base": 7,
+    "red_four": 14,
+    "red_one": 16,
+    "red_outpost": 7,
+    "red_sentry": 13,
+    "red_three": 10
+  },
+  "corner_definition": "pending_official_style",
+  "counts": {
+    "accepted_samples": 38,
+    "armors": 139,
+    "input_samples": 40,
+    "negative_frames": 0,
+    "rejected_samples": 2
+  },
+  "created_utc": "2026-11-05T04:23:54Z",
+  "image_formats": {
+    ".png": 38
+  },
+  "images_sha256": "2fdedb92479e53df0d6792d94d6ef81e0944bf2da257ea5ba3ebed3ceb57f497",
+  "importer": "canonical-jsonl@1",
+  "issues": {
+    "W_QUAD_ROLL": 3,
+    "W_SMALL_ARMOR": 1
+  },
+  "label_spec_sha256": "625f6b06eec0396ba78e18980adec2564161691458e492d289091de656c5938b",
+  "labels_sha256": "cd292e75a984384fa9479f4e4219b7186d4ea83f4ff88d1258a6397627a5a9ea",
+  "name": "style_b_smoke_fixed",
+  "notes": [
+    "canonical-jsonl: labels come straight from the simulator, which also records scene parameters"
+  ],
+  "pixel_convention": "edge",
+  "rejected": {
+    "E_QUAD_ORDER": 2
+  },
+  "role": "val",
+  "source": "sim",
+  "src_path": "/home/robo/net_training/runs/sim_style_b_smoke_fixed"
+}

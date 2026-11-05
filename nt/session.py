@@ -1,6 +1,6 @@
 """Capture sessions: the unit real data is collected, labeled and split by.
 
-    python -m nt.session create --src VIDEO_OR_IMAGE_DIR --name NAME --role train|val|hard|neg \\
+    python -m nt.session create --src VIDEO_OR_IMAGE_DIR_OR_RECORDER_PNG --name NAME --role train|val|hard|neg \\
         [--camera sleepy.yaml|camera.json] [--camera-key KEY] [--every N] [--start S] [--end S] [--max N] \\
         [--dedupe-hamming H] [--poses FILE.txt | --no-poses] [--notes TEXT] [--root sessions]
     python -m nt.session show sessions/NAME
@@ -18,9 +18,11 @@ sessions/<name>/
     frames/        <name>_<index>.png for video sources; stills keep their own format so a JPEG stays visibly lossy
 
 Sessions are immutable like datasets: the directory is built next to its destination and renamed at the end.
-A sleepy recording (record.enable in a sleepy config) is <time>.avi plus <time>.txt with `t qw qx qy qz` per frame.
+A sleepy video recording is <time>.avi plus <time>.txt with `t qw qx qy qz` per frame.
 The .txt next to a video is read by default: each frame's t_s and q_wxyz (gimbal orientation in gimbal_odom) come
 from it, and --start/--end refer to that time; without it t_s is index / container fps.
+Recorder PNG 会话使用 frames.jsonl 配对图像、时间、姿态和 camera_frame_id；默认不去重。
+可传入会话根目录、frames/ 子目录或 frames.jsonl。PNG 直接复制，不重新编码或交换颜色通道。
 
 Videos are decoded with OpenCV. A lossy source codec (H.264, MJPEG, ...) is recorded as a warning, because
 compression blurs the dot-matrix detail the network has to learn; record losslessly when you can.
@@ -41,6 +43,7 @@ import cv2
 import numpy as np
 import yaml
 
+from nt import recorder
 from nt.canonical import ROLES, Camera
 from nt.ingest import IMAGE_EXTS
 from nt.spec import LabelSpec
@@ -195,11 +198,18 @@ def create(
     out = root / name
     if out.exists():
         raise FileExistsError(f"{out} exists; sessions are immutable, use a new name")
-    if dedupe_hamming is None:
-        dedupe_hamming = LabelSpec.load().v("near_duplicate_hamming")
-
     warnings: list[str] = []
-    if src.is_dir():
+    recorder_rows = {}
+    recorder_root = recorder.png_root(src)
+    if recorder_root is not None:
+        if poses_path:
+            raise ValueError("Recorder PNG 使用 frames.jsonl 中的姿态，不支持 --poses 覆盖")
+        rows, source, warnings = recorder.load_png(recorder_root)
+        recorder_rows = {row["index"]: row for row in rows}
+        frames_in = ((row["index"], row["path"]) for row in rows)
+        fps, poses = None, None
+        source["poses_ignored"] = poses_path is False
+    elif src.is_dir():
         files = sorted(p for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTS)
         if not files:
             raise ValueError(f"no images in {src}")
@@ -233,7 +243,10 @@ def create(
             warnings += pose_warnings
             source["poses"] = {"path": str(Path(poses_path).resolve()), "sha256": _sha256(Path(poses_path)), "lines": len(poses),
                                "format": "sleepy recorder: t qw qx qy qz, gimbal orientation in gimbal_odom"}
-    source["time_base"] = "poses" if poses else ("fps" if fps else None)
+    source.setdefault("time_base", "poses" if poses else ("fps" if fps else None))
+    if dedupe_hamming is None:
+        # Recorder 会话默认保留连续帧；抽帧和去重必须由用户显式选择。
+        dedupe_hamming = -1 if recorder_root is not None else LabelSpec.load().v("near_duplicate_hamming")
 
     camera, calib_size, camera_desc = (None, None, None)
     if camera_path is not None:
@@ -243,7 +256,7 @@ def create(
 
     tmp = root / f".{name}.tmp"
     if tmp.exists():
-        shutil.rmtree(tmp)
+        raise FileExistsError(f"{tmp} 已存在，保留未完成数据；请换一个会话名")
     (tmp / "frames").mkdir(parents=True)
     kept, dropped_dupes, size, last_hash = [], 0, None, None
     decoded, stopped_early, no_pose = 0, False, 0
@@ -251,7 +264,11 @@ def create(
         for idx, item in frames_in:
             decoded = idx + 1
             q = None
-            if poses is not None:
+            record = recorder_rows.get(idx)
+            if record is not None:
+                t = record["t_s"]
+                q = record["q_wxyz"] if poses_path is not False else None
+            elif poses is not None:
                 # frame times come from the recorder: the container frame rate is nominal and the recorder drops
                 # frames when its writer is busy, so index / fps drifts from the real time
                 t, q = poses[idx] if idx < len(poses) else (None, None)
@@ -265,10 +282,18 @@ def create(
                 continue
             if idx % every:
                 continue
-            img = cv2.imread(str(item), cv2.IMREAD_COLOR) if isinstance(item, Path) else item
+            flags = cv2.IMREAD_UNCHANGED if record is not None else cv2.IMREAD_COLOR
+            img = cv2.imread(str(item), flags) if isinstance(item, Path) else item
             if img is None:
+                if record is not None:
+                    raise ValueError(f"Recorder PNG 无法解码：{item}")
                 warnings.append(f"unreadable frame {item}")
                 continue
+            if record is not None:
+                channels = img.shape[2] if img.ndim == 3 else 1
+                if (img.shape[:2] != (record["height"], record["width"])
+                        or channels != record["channels"] or img.dtype != np.uint8):
+                    raise ValueError(f"Recorder PNG 的实际尺寸、通道或位深与元数据不符：{item}")
             hw = img.shape[:2]
             if size is None:
                 size = hw
@@ -286,8 +311,12 @@ def create(
             else:
                 image = f"frames/{fid}.png"
                 cv2.imwrite(str(tmp / image), img, [cv2.IMWRITE_PNG_COMPRESSION, 3])
-            kept.append({"id": fid, "index": idx, "t_s": None if t is None else round(t, 4), "image": image,
-                         "dhash": f"{int(h):016x}", **({"q_wxyz": q} if q is not None else {}), **_frame_stats(img)})
+            extras = ({k: record[k] for k in ("write_index", "camera_frame_id", "source_image",
+                                              "source_pixel_format", "pixel_format")} if record is not None else {})
+            kept.append({"id": fid, "index": idx,
+                         "t_s": t if record is not None or t is None else round(t, 4), "image": image,
+                         "dhash": f"{int(h):016x}", **({"q_wxyz": q} if q is not None else {}),
+                         **extras, **_frame_stats(img)})
             if max_frames and len(kept) >= max_frames:
                 stopped_early = True
                 break
@@ -329,10 +358,17 @@ def camera_of(meta: dict) -> Camera | None:
     return None if meta.get("camera") is None else Camera(**meta["camera"])
 
 
+def frame_scene(meta: dict, frame: dict) -> dict:
+    """标注和代理屏入库时保留采集元数据，方便按原始帧追溯。"""
+    keys = ("camera_frame_id", "write_index", "q_wxyz", "source_image", "source_pixel_format", "pixel_format")
+    return {"session": meta["name"], "frame_index": frame["index"], "t_s": frame["t_s"],
+            **{k: frame[k] for k in keys if k in frame}}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("create", help="build a session from a video or an image folder")
+    c = sub.add_parser("create", help="从视频、图片目录或 Recorder PNG 会话创建采集会话")
     c.add_argument("--src", type=Path, required=True)
     c.add_argument("--name", required=True)
     c.add_argument("--role", choices=SESSION_ROLES, required=True)
@@ -343,10 +379,10 @@ def main() -> None:
     c.add_argument("--end", type=float, default=None, help="seconds")
     c.add_argument("--max", type=int, default=0, help="stop after N kept frames")
     c.add_argument("--dedupe-hamming", type=int, default=None,
-                   help="drop a frame whose dHash is within H bits of the previous kept one (-1 keeps all; default from label_spec)")
+                   help="相邻保留帧的 dHash 去重阈值；-1 不去重，Recorder PNG 默认 -1，其他来源默认从 label_spec 读取")
     c.add_argument("--poses", type=Path, default=None,
                    help="sleepy recorder file (t qw qx qy qz per frame); default: <video>.txt next to the video if it exists")
-    c.add_argument("--no-poses", action="store_true", help="ignore <video>.txt and time frames by the container frame rate")
+    c.add_argument("--no-poses", action="store_true", help="忽略姿态；视频回退到容器帧率，Recorder PNG 仍保留 JSONL 的真实时间")
     c.add_argument("--notes", default="")
     c.add_argument("--root", type=Path, default=ROOT / "sessions")
     s = sub.add_parser("show", help="summarize a session")

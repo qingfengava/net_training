@@ -1,0 +1,5 @@
+# 仅验证点阵采样残差；默认只作用于仿真训练分区。
+base: default.yaml
+effects:
+  moire:
+    prob: 0.35

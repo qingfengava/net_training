@@ -43,9 +43,10 @@ from nt.canonical import Sample, read_manifest, read_samples, sample_to_dict, sa
 from nt.convert import pose_line
 from nt.geometry import bbox
 from nt.spec import LabelSpec
+from nt.bake_augment import apply_moire, centered_motion_kernel, tracker_roi, validate_config
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "bake" / "default.yaml"
-BAKE_VERSION = "2"  # 2: per-dataset role decides the split (nt/canonical.py ROLES)
+BAKE_VERSION = "3"  # 3：修正模糊核，增加可选的预测 ROI 和点阵采样增强。
 
 BGR = {"red": (40, 40, 255), "blue": (255, 90, 20), "white": (255, 255, 255), "green": (60, 255, 60), "amber": (0, 190, 255)}
 
@@ -73,6 +74,7 @@ def load_config(path: Path | str | None = None, override: dict | None = None) ->
     w, h = cfg["size"]
     if w * 3 != h * 4:
         raise ValueError(f"size {w}x{h} is not 4:3")
+    validate_config(cfg)
     return cfg
 
 
@@ -199,11 +201,20 @@ def apply_effects(img: np.ndarray, rng, cfg: dict) -> tuple[np.ndarray, dict]:
     if rng.random() < e["motion_blur"]["prob"]:
         length = int(rng.integers(e["motion_blur"]["length_px"][0], e["motion_blur"]["length_px"][1] + 1))
         ang = rng.uniform(0, 180)
-        k = np.zeros((length, length), np.float32)
-        c = (length - 1) / 2
-        dx, dy = math.cos(math.radians(ang)) * c, math.sin(math.radians(ang)) * c
-        cv2.line(k, (round(c - dx), round(c - dy)), (round(c + dx), round(c + dy)), 1.0, 1)
-        lin = cv2.filter2D(lin, -1, k / max(float(k.sum()), 1e-6), borderType=cv2.BORDER_REFLECT)
+        algorithm = e["motion_blur"].get("kernel", "legacy_v2")
+        if algorithm == "centered_v1":
+            k = centered_motion_kernel(length, float(ang))
+            lin = cv2.filter2D(lin, -1, k, anchor=(k.shape[1] // 2, k.shape[0] // 2), borderType=cv2.BORDER_REFLECT)
+            used["motion_blur_kernel"] = algorithm
+        elif algorithm == "legacy_v2":
+            # 仅供历史清单复现；保持旧随机序列、运算顺序和舍入方式。
+            k = np.zeros((length, length), np.float32)
+            c = (length - 1) / 2
+            dx, dy = math.cos(math.radians(ang)) * c, math.sin(math.radians(ang)) * c
+            cv2.line(k, (round(c - dx), round(c - dy)), (round(c + dx), round(c + dy)), 1.0, 1)
+            lin = cv2.filter2D(lin, -1, k / max(float(k.sum()), 1e-6), borderType=cv2.BORDER_REFLECT)
+        else:
+            raise ValueError(f"未知运动模糊核：{algorithm}")
         used["motion_blur"] = [length, round(float(ang), 1)]
     if rng.random() < e["defocus"]["prob"]:
         sigma = rng.uniform(*e["defocus"]["sigma_px"])
@@ -306,11 +317,9 @@ def _init_worker(spec_path: str, cfg: dict) -> None:
     _WORKER["cfg"] = cfg
 
 
-def bake_one(task: dict) -> dict:
-    spec: LabelSpec = _WORKER["spec"]
-    cfg: dict = _WORKER["cfg"]
+def prepare_view(task: dict, spec: LabelSpec, cfg: dict) -> dict:
+    """重建缩放前的视图；分析工具与正式烘焙共用同一随机序列和成像操作。"""
     sample = sample_from_dict(task["sample"])
-    out_w, out_h = cfg["size"]
     rng = np.random.default_rng([task["seed"], zlib.crc32(sample.id.encode()), task["copy"]])
 
     img = cv2.imread(str(Path(task["root"]) / sample.image), cv2.IMREAD_COLOR)
@@ -327,21 +336,56 @@ def bake_one(task: dict) -> dict:
     skipped_colors = len(sample.armors) - len(trained)
     boxes = [bbox(a.corners) for a in trained]
     roi, how = choose_roi(rng, img_w, img_h, boxes, cfg)
+    # 新增随机流独立于历史效果流；默认开关关闭不改变旧清单的像素。
+    def extra_rng(name):
+        return np.random.default_rng([task["seed"], zlib.crc32(sample.id.encode()), task["copy"], zlib.crc32(name.encode())])
+    split = task.get("split", "val")
+    proposal = tracker_roi(extra_rng("tracker_roi_v1"), sample, boxes, cfg, split, lens_applied=lens is not None,
+                           base_indices=[i for i, a in enumerate(trained) if a.label == 7])
+    roi_meta = None
+    if proposal is not None:
+        roi, how, roi_meta = proposal
     x0, y0, rw, rh = roi
-    scale = out_w / rw
     crop = img[y0:y0 + rh, x0:x0 + rw].copy()
 
     ref_px = float(np.median([b[2] - b[0] for b in boxes])) if boxes else 0.03 * img_w
     local_boxes = [(b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0) for b in boxes]
     clutter = draw_distractors(crop, rng, cfg, local_boxes, ref_px)
+    crop, moire_meta = apply_moire(crop, extra_rng("moire_v1"), sample, trained, roi, cfg["effects"].get("moire", {}), split)
     crop, used = apply_effects(crop, rng, cfg)
+    if moire_meta is not None:
+        used["moire"] = moire_meta
     if lens is not None:
         used["lens"] = lens
+    return {"sample": sample, "source_image": img, "trained": trained, "boxes": boxes,
+            "roi": roi, "roi_mode": how, "roi_augmentation": roi_meta, "native": crop, "effects": used,
+            "distractors": len(clutter), "skipped_colors": skipped_colors}
+
+
+def bake_one(task: dict) -> dict:
+    spec: LabelSpec = _WORKER["spec"]
+    cfg: dict = _WORKER["cfg"]
+    view = prepare_view(task, spec, cfg)
+    if "error" in view:
+        return view
+    sample, trained, boxes = view["sample"], view["trained"], view["boxes"]
+    roi, how, crop, used = view["roi"], view["roi_mode"], view["native"], view["effects"]
+    x0, y0, rw, rh = roi
+    out_w, out_h = cfg["size"]
+    scale = out_w / rw
     net = cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
     lines, armors_meta, dropped = [], [], 0
     for a, box in zip(trained, boxes):
-        if _inside_fraction(box, roi) < 0.5:
+        if view["roi_augmentation"] is not None:
+            # 预测窗口允许漏裁。保留有实际面交集的目标，出窗角点标为不可见，
+            # 避免将仍在画面中的半块装甲错误地变成无标注背景。
+            window = np.array([[x0, y0], [x0 + rw, y0], [x0 + rw, y0 + rh], [x0, y0 + rh]], np.float32)
+            area, _ = cv2.intersectConvexConvex(np.asarray(a.corners, np.float32), window)
+            keep = area > 1e-6
+        else:
+            keep = _inside_fraction(box, roi) >= 0.5
+        if not keep:
             dropped += 1
             continue
         corners = [[(x - x0) * scale, (y - y0) * scale] for x, y in a.corners]
@@ -359,12 +403,15 @@ def bake_one(task: dict) -> dict:
     out = Path(task["out"])
     cv2.imwrite(str(out / "images" / split / f"{name}.png"), net, [cv2.IMWRITE_PNG_COMPRESSION, 1])
     (out / "labels" / split / f"{name}.txt").write_text("".join(ln + "\n" for ln in lines))
-    return {
+    meta = {
         "image": f"images/{split}/{name}.png", "sample": sample.id, "source": task["source"], "copy": task["copy"],
         "split": split, "roi": [x0, y0, rw, rh], "roi_mode": how, "scale": scale, "effects": used,
-        "distractors": len(clutter), "armors": armors_meta, "dropped_by_roi": dropped,
-        "skipped_untrained_colors": skipped_colors, "scene": sample.scene,
+        "distractors": view["distractors"], "armors": armors_meta, "dropped_by_roi": dropped,
+        "skipped_untrained_colors": view["skipped_colors"], "scene": sample.scene,
     }
+    if view["roi_augmentation"] is not None:
+        meta["roi_augmentation"] = view["roi_augmentation"]
+    return meta
 
 
 # ---- driver -------------------------------------------------------------------------------------------------
@@ -381,6 +428,7 @@ def split_of(sample_id: str, val_fraction: float, role: str = "auto") -> str:
 
 
 def bake(sources: list[tuple[Path, int]], out: Path, spec: LabelSpec, cfg: dict, copies: int, seed: int, workers: int, spec_path: str, limit: int = 0) -> dict:
+    validate_config(cfg)
     if out.exists():
         raise FileExistsError(f"{out} exists; bakes are never overwritten")
     tasks, src_info, seen = [], [], set()
@@ -441,6 +489,8 @@ def bake(sources: list[tuple[Path, int]], out: Path, spec: LabelSpec, cfg: dict,
         "armors": {s: dict(sorted(c.items())) for s, c in class_counts.items()},
         "roi_modes": dict(Counter(m["roi_mode"] for m in metas)),
         "images_with_distractors": sum(1 for m in metas if m["distractors"]),
+        "tracker_roi_states": dict(Counter(m["roi_augmentation"]["state"] for m in metas if "roi_augmentation" in m)),
+        "images_with_moire": sum(any(a["changed_values"] > 0 for a in m["effects"].get("moire", {}).get("applied", [])) for m in metas),
         "armors_dropped_by_roi": sum(m["dropped_by_roi"] for m in metas),
         "armors_skipped_untrained_colors": sum(m["skipped_untrained_colors"] for m in metas),
         "meta_sha256": hashlib.sha256((tmp / "meta.jsonl").read_bytes()).hexdigest(),

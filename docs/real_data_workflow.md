@@ -18,9 +18,10 @@
     python -m nt.session create --src 录像.avi --name s20261201_hero_a --role train --camera ~/sleepy/config/hero.yaml --every 3
 
 - 带上 `--camera`，并指向录像所用相机的 sleepy 配置（读其中的 `camera_info`）。有了内参，回放评估才能算 PnP。
-- 录像尽量无损。sleepy 现在用 MJPG 录像，H.264 和 MJPG 都会把点阵屏的细节压糊。会话会把有损编码记成警告。
+- 训练采集优先使用 sleepy 的 `png_sequence` 或 FFV1；MJPG 保留用于普通记录。有损视频仍会记为警告。Recorder PNG 可直接传入会话根目录，命令和元数据约定见 [PNG 采集与 A/B 代理屏](recorder_png_proxy.md)。
 - sleepy 内录（`record.enable: true`）会在 `<时间>.avi` 旁边写一个同名的 `<时间>.txt`，第 i 行是第 i 帧的 `t qw qx qy qz`。会话默认读取它：每帧的 `t_s` 用录像器记的真实时间，`q_wxyz` 是该帧的云台姿态（gimbal_odom 系），`--start`/`--end` 也按这个时间算。录像器写盘忙时会丢帧，所以不能用"帧号 ÷ 帧率"推时间。txt 里有坏行会直接报错（只有被 `kill -9` 截断的最后一行例外），行数和帧数对不上会记警告。txt 不在旁边时用 `--poses` 指定，`--no-poses` 则忽略它。
-- 录给标注用的会话可以加大 `--every`；录给回放评估用的会话用 `--every 1`。
+- Recorder PNG 自动读取 `frames.jsonl`，保留真实时间、归一化后的姿态、`camera_frame_id`、`write_index` 和源像素格式；不依赖 `poses.txt`，不按文件名猜测配对。PNG 默认不去重。
+- 录给标注用的会话可以加大 `--every`；录给回放评估用的会话用 `--every 1 --dedupe-hamming -1`。视频和普通图片目录的默认去重行为保持原设置。
 
 ## 2. 预标注和分批
 
@@ -74,6 +75,15 @@ PnP 用的物理尺寸在 `configs/geometry.yaml`。官方样式出来后，要�
 官方装甲到手之前，用显示器模拟一块点阵屏，得到真实镜头下带精确角点的图：
 
     python -m nt.proxy render --out proxies/red3 --label three --color red
+
+复用已有 A/B 图案与几何时，传入仿真器使用的同一份规格：
+
+```bash
+python -m nt.proxy render --out proxies/b_red3 --label three --color red \
+    --screen-spec configs/screens/rm27_hypothesis_b.toml
+```
+
+范围默认取中点，点形取第一项；B 自动使用 64×48 方点和七段数字 PNG，A 的数字按仿真器字库绘制，哨兵/前哨站/基地优先使用 PNG。规格文件及图案哈希、实际点阵和点亮掩码会写入 `proxy.json`。面板宽高比与点阵行列数独立；`nominal_size_mm` 只是样式参数，不是显示器上的实际尺寸。PnP 前要实测显示区域并同步回放几何配置。
 
 1. 把 `proxy.png` 在显示器上 100% 缩放全屏显示，用机器人相机绕着拍，建成一个会话。
 2. 运行下面的命令。它用四角的 ArUco 标记解出单应矩阵，自动算出点阵外框的四个角，不用人标。

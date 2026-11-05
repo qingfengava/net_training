@@ -1,0 +1,9 @@
+# 待实拍校准的实验配置：仅给仿真训练分区增加两项增强。
+# 验证分区使用修正模糊核后的基础增强，避免把验证成绩混成同分布收益。
+base: default.yaml
+roi:
+  tracker:
+    prob: 1.0
+effects:
+  moire:
+    prob: 0.35

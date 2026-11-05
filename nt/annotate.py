@@ -153,7 +153,7 @@ def export(
             frames = [by_id[i] for i in dict.fromkeys(wanted)]
         for f in frames:
             items.append((f["id"], session_dir / f["image"], meta["width"], meta["height"], None,
-                          {"session": meta["name"], "frame_index": f["index"], "t_s": f["t_s"]}))
+                          sess.frame_scene(meta, f)))
     else:
         man = read_manifest(dataset_dir / "manifest.json")
         if man.label_spec_sha256 != spec.sha256:

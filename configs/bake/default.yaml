@@ -16,6 +16,23 @@ roi:
   # An armor that is cut by the ROI border so that this share of it remains is neither clearly in nor out.
   # The ROI is drawn again; after `tries` the whole frame is used.
   ambiguous_inside: [0.05, 0.6]
+  tracker:
+    # 默认关闭；实验配置开启。静态样本上的误差分布不等同于真实跟踪回放。
+    prob: 0.0
+    train_only: true
+    search_prob: 0.35
+    patrol_prob: 0.05
+    recovery_prob: 0.20
+    envelope_multiple: [2.0, 5.0]
+    expand_ratio: 1.4
+    base_expand_ratio: 3.0
+    age_ms: [2.0, 20.0]
+    recovery_age_ms: [20.0, 300.0]
+    lost_time_ms: 1500.0
+    center_sigma: 0.04
+    recovery_sigma_per_s: 0.25
+    velocity_error_frame_s: [0.0, 0.4]
+    log_scale_sigma: 0.12
 
 effects:
   gain: [0.5, 2.0]            # exposure in linear light, log-uniform
@@ -29,11 +46,25 @@ effects:
   motion_blur:
     prob: 0.4
     length_px: [2, 9]
+    # 缺少该字段的历史清单继续使用旧算法，保证历史审计逐像素复现。
+    kernel: centered_v1
   defocus:
     prob: 0.4
     sigma_px: [0.4, 1.3]
   read_noise: [0.0, 0.012]    # sigma in linear light
   shot_noise: [0.0, 0.02]     # sigma = k * sqrt(signal), linear light
+  moire:
+    # 点阵的空间采样模型，不模拟滚动快门或显示刷新。
+    prob: 0.0
+    train_only: true
+    grid_source: scene
+    grid: [64, 48]
+    dot: square
+    fill: [0.45, 0.85]
+    strength: [0.15, 0.35]
+    optical_sigma_px: [0.15, 0.45]
+    pixel_aperture: [0.6, 1.0]
+    harmonics: 3
 
 distractors:
   # Armor-like things that are not armors: light bars, small LED panels, glowing blobs.

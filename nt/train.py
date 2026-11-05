@@ -18,6 +18,7 @@ import csv
 import hashlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -94,6 +95,8 @@ def main() -> None:
     ap.add_argument("--qat", choices=["rknn", "tensorrt"], help="quantization-aware fine-tuning of a trained .pt (nt/qat.py)")
     ap.add_argument("--qat-freeze", type=float, default=0.5, help="with --qat: freeze activation ranges after this share of epochs")
     ap.add_argument("--device", default="0")
+    ap.add_argument("--milestones", nargs="+", type=int, default=[],
+                    help="按实际完成轮数额外保存检查点，例如 10 30 60")
     args = ap.parse_args()
     # Ultralytics puts a relative project under runs/<task>/, so the run would land elsewhere than nt_meta.json
     args.project = args.project.resolve()
@@ -114,6 +117,8 @@ def main() -> None:
         if getattr(args, key) is not None:
             hyp[key] = getattr(args, key)
     check_hyp(hyp)
+    if any(epoch < 1 or epoch > int(hyp["epochs"]) for epoch in args.milestones):
+        raise SystemExit("--milestones 必须位于 1 到训练总轮数之间")
     data_yaml = args.data / "data.yaml"
     manifest = args.data / "bake_manifest.json"
     if not data_yaml.exists() or not manifest.exists():
@@ -137,6 +142,13 @@ def main() -> None:
             raise SystemExit("--qat needs amp: false in the hyp file (configs/train/pose_qat.yaml)")
         trainer = qat.make_trainer(args.qat, freeze_epoch=int(round(args.qat_freeze * int(train_args["epochs"]))))
     model = YOLO(str(args.model), task="pose")
+    if args.milestones:
+        def save_milestone(trainer):
+            # Ultralytics 的 epochN 文件使用从零开始的编号；此处记录实际完成轮数。
+            epoch = trainer.epoch + 1
+            if epoch in args.milestones:
+                shutil.copy2(trainer.last, trainer.wdir / f"milestone_{epoch:03d}.pt")
+        model.add_callback("on_model_save", save_milestone)
     t0 = time.time()
     status = "completed"
     try:
@@ -156,6 +168,7 @@ def main() -> None:
         save_dir.mkdir(parents=True, exist_ok=True)
         (save_dir / "nt_meta.json").write_text(json.dumps({
             "status": status,
+            "milestone_epochs": sorted(set(args.milestones)),
             "wall_time_s": round(time.time() - t0, 1),
             "versions": {"torch": torch.__version__, "ultralytics": ultralytics.__version__,
                          "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None},

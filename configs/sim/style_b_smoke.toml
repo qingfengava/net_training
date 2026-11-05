@@ -1,0 +1,37 @@
+# 样式 B 检查图；独立种子，不进入训练或正式验证。
+out_dir = "/home/robo/net_training/runs/sim_style_b_smoke_fixed"
+seed = 303
+samples = 40
+settle_frames = 4
+timeout_frames = 300
+
+[camera]
+fov_y_deg = [35.0, 55.0]
+distance_m = [1.0, 9.0]
+height_m = [0.25, 1.8]
+max_off_axis_deg = 70.0
+frame_jitter = 0.6
+roll_deg = 4.0
+
+[light]
+illuminance = [150.0, 1500.0]
+elevation_deg = [25.0, 85.0]
+
+[scene]
+region_half_m = 2.5
+region_center = [0.0, 0.0]
+min_separation_m = 0.9
+max_tilt_deg = 6.0
+outpost_target_fraction = 0.12
+base_target_fraction = 0.08
+
+[labels]
+min_visible_fraction = 0.35
+ignore_below_fraction = 0.05
+max_view_angle_deg = 75.0
+depth_tolerance_m = 0.05
+min_edge_px = 3.0
+
+[armor]
+style = "screen"
+screen_spec = "../screens/rm27_hypothesis_b.toml"
