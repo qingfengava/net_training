@@ -1,0 +1,6 @@
+# 带拜耳取样的验证集：拜耳也作用于验证分区，其余与 default.yaml 相同。
+# 用来回答“训练时加拜耳能不能追回部署时的损失”；它与训练增强来自同一套模拟，不代表真实相机。
+base: bayer.yaml
+effects:
+  bayer:
+    train_only: false

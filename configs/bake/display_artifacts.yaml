@@ -1,0 +1,9 @@
+# 点阵屏成像伪影的组合实验：摩尔纹 + 拜耳伪色 + 频闪。预测 ROI 不开（11-06 消融里它降低了精度）。
+base: default.yaml
+effects:
+  moire:
+    prob: 0.35
+  bayer:
+    prob: 0.5
+  flicker:
+    prob: 0.35

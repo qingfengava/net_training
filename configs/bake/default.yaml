@@ -53,6 +53,27 @@ effects:
     sigma_px: [0.4, 1.3]
   read_noise: [0.0, 0.012]    # sigma in linear light
   shot_noise: [0.0, 0.02]     # sigma = k * sqrt(signal), linear light
+  flicker:
+    # 全局快门下 LED 点阵的 PWM 频闪：每一行在曝光窗口里收到的光 = 方波的积分。默认关闭，等官方模块的刷新频率
+    # 和扫描方式测出来再填 refresh_hz、duty、scan_span。曝光里恰好含整数个刷新周期时没有频闪（T×f 为整数）。
+    prob: 0.0
+    train_only: true
+    refresh_hz: [240.0, 4000.0]   # 对数均匀；240 Hz 时 1.5 ms 曝光只含 0.36 个周期，条纹最重
+    duty: [0.15, 0.9]             # PWM 亮的时间占周期的比例
+    exposure_ms: [0.5, 3.5]       # sleepy 的自动曝光范围 0.1～3.5 ms，比赛常用 1.5～2 ms
+    scan_span: [0.0, 1.0]         # 扫描一遍整屏占几个刷新周期；0 为所有行同步，1 为相位均匀铺满一个周期
+    scan_direction: random        # down、up 或 random
+    synchronized: false           # true：一帧里所有屏用同一个扫描相位
+    frame_sigma: 0.0              # 整屏亮度因子的对数标准差；自动曝光会补偿平均亮度，默认不额外抖动
+    grid_source: scene            # 行数来自场景里的点阵行数（scene），缺失时用 rows
+    rows: 48
+  bayer:
+    # 让整帧走 RGGB 取样、8 位量化和双线性去马赛克（sleepy 对海康 BayerRG8 用 nppiCFAToRGB），
+    # 点阵与滤色阵列相互混叠，产生亮度条纹和伪色。默认关闭。
+    prob: 0.0
+    train_only: true
+    pattern: rggb
+    demosaic: bilinear
   moire:
     # 点阵的空间采样模型，不模拟滚动快门或显示刷新。
     prob: 0.0

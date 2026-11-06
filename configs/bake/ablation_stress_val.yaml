@@ -1,0 +1,10 @@
+# 合成压力验证集：让预测 ROI 和摩尔纹也作用于验证分区，其余与 tracker_moire.yaml 相同。
+# 只用来看模型遇到被截断的装甲和点阵摩尔纹时会不会出错。它与训练增强来自同一套模拟，
+# 开了增强的模型在这里占优是必然的，不能当作真实相机的收益。
+base: tracker_moire.yaml
+roi:
+  tracker:
+    train_only: false
+effects:
+  moire:
+    train_only: false

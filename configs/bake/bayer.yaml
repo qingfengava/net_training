@@ -1,0 +1,7 @@
+# 仅验证拜耳取样（RGGB + 双线性去马赛克）；其余使用修正模糊核后的基线。默认只作用于仿真训练分区。
+# 概率 1.0：真实相机每一帧都经过拜耳取样和去马赛克，仿真训练图要和部署时看到的一致。
+# 2026-11-06 的验证训练用这份配置（runs/experiments/bayer_validation_s0）。
+base: default.yaml
+effects:
+  bayer:
+    prob: 1.0

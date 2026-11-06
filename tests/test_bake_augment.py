@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 
 from nt import bake
-from nt.bake_augment import apply_moire, centered_motion_kernel, sampling_pattern, tracker_roi
+from nt.bake_augment import (_pwm_integral, apply_bayer, apply_flicker, apply_moire, bayer_demosaic, bayer_mosaic,
+                             centered_motion_kernel, row_exposure_gain, sampling_pattern, tracker_roi)
 from nt.canonical import Armor, Sample, sample_to_dict
 from nt.spec import LabelSpec
 from test_bake import NO_EFFECTS
@@ -217,6 +218,186 @@ class MoireTest(unittest.TestCase):
             self.assertEqual(state, rng.bit_generator.state)
 
 
+class FlickerTest(unittest.TestCase):
+    def setUp(self):
+        self.options = configuration({"effects": {"flicker": {"prob": 1, "grid_source": "config", "rows": 48}}})["effects"]["flicker"]
+
+    def test_whole_number_of_refresh_periods_in_exposure_shows_no_flicker(self):
+        for hz, exposure_s in ((500.0, 0.004), (1000.0, 0.002), (240.0, 1 / 240), (2000.0, 0.0015)):
+            for start in (0.0, 0.000123, 0.0007):
+                gain = row_exposure_gain(48, hz, 0.4, exposure_s, start, 0.3, 1.0)
+                np.testing.assert_allclose(gain, 1.0, atol=1e-12)
+
+    def test_short_exposure_gives_rows_different_brightness_with_unit_mean(self):
+        gain = row_exposure_gain(48, 240.0, 0.5, 0.0015, 0.0, 0.0, 1.0)  # 0.36 个周期
+        self.assertGreater(gain.max() - gain.min(), 1.0)
+        self.assertLessEqual(gain.max(), 1 / 0.5 + 1e-9)
+        self.assertGreaterEqual(gain.min(), 0)
+        starts = np.random.default_rng(0).random(4000) / 240
+        mean = np.mean([row_exposure_gain(48, 240.0, 0.5, 0.0015, s, 0.0, 1.0).mean() for s in starts])
+        self.assertAlmostEqual(mean, 1.0, delta=0.02)
+
+    def test_synchronized_scan_makes_all_rows_equal_and_direction_reverses_the_stripes(self):
+        flat = row_exposure_gain(48, 240.0, 0.5, 0.0015, 0.001, 0.2, 0.0)
+        np.testing.assert_allclose(flat, flat[0])
+        down = row_exposure_gain(48, 240.0, 0.5, 0.0015, 0.001, 0.2, 0.7, True)
+        up = row_exposure_gain(48, 240.0, 0.5, 0.0015, 0.001, 0.2, 0.7, False)
+        np.testing.assert_allclose(down, up[::-1])
+        self.assertGreater(np.abs(down - up).max(), 0.1)
+
+    def test_pwm_integral_matches_numeric_integration(self):
+        t = np.linspace(0, 3.7, 20001)
+        wave = ((t % 1) < 0.35).astype(float)
+        numeric = np.concatenate([[0], np.cumsum((wave[1:] + wave[:-1]) / 2 * np.diff(t))])
+        self.assertLess(np.abs(numeric - _pwm_integral(t, 0.35)).max(), 2e-4)
+
+    def test_stripes_follow_screen_rows_and_only_lit_visible_screens_change(self):
+        armor = plate([[20, 20], [20, 100], [140, 100], [140, 20]])
+        s = sample([armor]); image = np.full((120, 160, 3), (40, 80, 200), np.uint8)
+        self.options.update(refresh_hz=[240, 240], exposure_ms=[1.5, 1.5], duty=[0.5, 0.5], scan_span=[1, 1], scan_direction="down")
+        out, report = apply_flicker(image, np.random.default_rng(3), s, s.armors, (0, 0, 160, 120), self.options, "train")
+        self.assertEqual(report["model"], "global_shutter_pwm_v1")
+        np.testing.assert_array_equal(out[:15], image[:15]); np.testing.assert_array_equal(out[:, :15], image[:, :15])
+        column = out[25:95, 80, 2].astype(float)
+        self.assertGreater(column.max() - column.min(), 30)  # 条纹沿屏的行方向变化
+        row = out[60, 30:130, 2].astype(float)
+        self.assertLess(row.max() - row.min(), 6)             # 同一行内亮度一致（行间才不同）
+        self.assertTrue(np.all(out[25:95, 30:130, 2] >= out[25:95, 30:130, 1]))  # 不改颜色顺序
+        for changed in (plate(occ=.1), plate(vis=[2, 1, 2, 2])):
+            same, meta = apply_flicker(image, np.random.default_rng(3), s, [changed], (0, 0, 160, 120), self.options, "train")
+            np.testing.assert_array_equal(same, image); self.assertEqual(meta["applied"], [])
+        for state in ("off", "flicker"):
+            other = plate(); other.screen_state = state
+            same, meta = apply_flicker(image, np.random.default_rng(3), s, [other], (0, 0, 160, 120), self.options, "train")
+            np.testing.assert_array_equal(same, image); self.assertEqual(meta["applied"], [])
+        again, report2 = apply_flicker(image, np.random.default_rng(3), s, s.armors, (0, 0, 160, 120), self.options, "train")
+        np.testing.assert_array_equal(out, again); self.assertEqual(report, report2)
+
+    def test_rendered_brightness_ratio_equals_the_recorded_row_gain_and_clips_at_full_scale(self):
+        # 用未饱和的暗红屏逐行核对：渲染的线性光比值就是模型的行增益；再用接近满刻度的屏幕核对限幅。
+        armor = plate([[20, 10], [20, 110], [140, 110], [140, 10]])
+        s = sample([armor]); rows = 40
+        self.options.update(refresh_hz=[300, 300], exposure_ms=[1.2, 1.2], duty=[0.4, 0.4], scan_span=[1, 1],
+                            scan_direction="down", rows=rows)
+        dim = np.full((120, 160, 3), (4, 10, 40), np.uint8)
+        out, report = apply_flicker(dim, np.random.default_rng(4), s, s.armors, (0, 0, 160, 120), self.options, "train")
+        applied = report["applied"][0]
+        gains = row_exposure_gain(rows, report["refresh_hz"], report["duty"], report["exposure_ms"] / 1000,
+                                  report["exposure_start_ms"] / 1000, applied["scan_phase"], applied["scan_span"], applied["descending"])
+        linear = lambda x: (np.asarray(x, float) / 255) ** 2.2
+        encode = lambda lin: np.clip(np.floor(np.clip(lin, 0, 1) ** (1 / 2.2) * 255 + 0.5), 0, 255)
+        checked = 0
+        for r in range(1, rows - 1):  # 首尾两行在屏的边缘渐入区里，增益被有意稀释
+            y = 10 + int((r + 0.5) * 100 / rows)
+            expected = encode(linear(dim[y, 80, 2]) * gains[r])  # 渲染 = 模型行增益，再取整到 8 位
+            self.assertEqual(int(out[y, 80, 2]), int(expected), f"row {r}")
+            checked += 1
+        self.assertEqual(checked, rows - 2)
+        edge_row = int(out[10 + int(0.5 * 100 / rows), 80, 2])  # 边缘行与未渐入的期望不同：渐入把增益向 1 拉
+        self.assertNotEqual(edge_row, int(encode(linear(dim[11, 80, 2]) * gains[0])))
+        bright = np.full((120, 160, 3), (4, 20, 250), np.uint8)
+        clipped, _ = apply_flicker(bright, np.random.default_rng(4), s, s.armors, (0, 0, 160, 120), self.options, "train")
+        boosted, saturated = 0, 0
+        for r in range(1, rows - 1):
+            y = 10 + int((r + 0.5) * 100 / rows)
+            value = int(clipped[y, 80, 2])
+            if gains[r] > 1.05:   # 增益大于 1 的行不能变暗：限幅在满刻度，而不是溢出回绕成小数
+                boosted += 1
+                self.assertGreaterEqual(value, 250, f"row {r}")
+                saturated += value == 255
+            elif gains[r] < 0.01:  # LED 在整个曝光里都是灭的：该行熄灭
+                self.assertLess(value, 5, f"row {r}")
+        self.assertGreater(boosted, 5)
+        self.assertGreater(saturated, 0)                              # 确实有行被推到满刻度
+
+    def test_off_real_and_validation_paths_are_exact_noops(self):
+        image = np.full((120, 160, 3), 120, np.uint8); s = sample([plate()])
+        for source, split, prob in (("real", "train", 1), ("sim", "val", 1), ("sim", "train", 0)):
+            s.source = source; self.options["prob"] = prob
+            rng = np.random.default_rng(2); state = copy.deepcopy(rng.bit_generator.state)
+            out, meta = apply_flicker(image, rng, s, s.armors, (0, 0, 160, 120), self.options, split)
+            np.testing.assert_array_equal(out, image); self.assertIsNone(meta)
+            self.assertEqual(state, rng.bit_generator.state)
+
+
+class BayerTest(unittest.TestCase):
+    def setUp(self):
+        self.options = configuration({"effects": {"bayer": {"prob": 1}}})["effects"]["bayer"]
+
+    def test_neutral_flat_and_smooth_images_do_not_get_false_color(self):
+        flat = np.full((32, 40, 3), (90, 120, 200), np.uint8)
+        out, _ = apply_bayer(flat, np.random.default_rng(0), sample(), (0, 0, 40, 32), self.options, "train")
+        np.testing.assert_array_equal(out[2:-2, 2:-2], flat[2:-2, 2:-2])
+        ramp = np.repeat(np.linspace(30, 220, 64)[None, :, None], 3, axis=2).repeat(40, axis=0).astype(np.uint8)
+        out, _ = apply_bayer(ramp, np.random.default_rng(0), sample(), (0, 0, 64, 40), self.options, "train")
+        self.assertLessEqual(int(np.abs(out[4:-4, 4:-4].astype(int) - ramp[4:-4, 4:-4]).max()), 2)
+
+    def test_impulse_response_matches_nvidia_npp_bilinear_kernels(self):
+        for (py, px), channel, expected in (
+                ((0, 0), 0, [[.25, .5, .25], [.5, 1, .5], [.25, .5, .25]]),   # 红色位点只在红通道响应
+                ((1, 1), 2, [[.25, .5, .25], [.5, 1, .5], [.25, .5, .25]]),   # 蓝色位点
+                ((0, 1), 1, [[0, .25, 0], [.25, 1, .25], [0, .25, 0]]),       # 绿色位点
+                ((1, 0), 1, [[0, .25, 0], [.25, 1, .25], [0, .25, 0]])):
+            rgb = np.zeros((16, 16, 3), np.float64); y, x = 8 + py, 8 + px
+            mosaic = np.zeros((16, 16)); mosaic[y, x] = 200
+            out = bayer_demosaic(mosaic)
+            np.testing.assert_allclose(out[y - 1:y + 2, x - 1:x + 2, channel] / 200, expected, atol=1e-12)
+            others = [c for c in range(3) if c != channel]
+            self.assertEqual(float(np.abs(out[..., others]).max()), 0.0)
+
+    def test_red_dot_grid_gets_false_color_and_phase_follows_roi_origin(self):
+        dots = np.zeros((40, 64, 3), np.uint8)
+        for y in range(3, 40, 3):
+            for x in range(3, 64, 3):
+                dots[y:y + 2, x:x + 2] = (20, 30, 240)  # BGR 的红点
+        a, report = apply_bayer(dots, np.random.default_rng(0), sample(), (0, 0, 64, 40), self.options, "train")
+        b, _ = apply_bayer(dots, np.random.default_rng(0), sample(), (1, 0, 64, 40), self.options, "train")
+        gained_blue = a[..., 0].astype(int) - dots[..., 0].astype(int)
+        self.assertGreater(int(gained_blue.max()), 10)                  # 蓝通道比原图多出来：伪色
+        self.assertGreater(int(((gained_blue > 8) & (dots.sum(-1) == 0)).sum()), 100)  # 暗背景上也出现蓝色
+        self.assertLess(int((a[..., 2].astype(int) - dots[..., 2].astype(int)).min()), -100)  # 红点被抹掉一部分
+        self.assertGreater(float(np.abs(a.astype(int) - dots).mean()), 1.0)
+        self.assertGreater(float(np.abs(a.astype(int) - b.astype(int)).mean()), 1.0)  # 奇偶相位不同，结果不同
+        self.assertEqual(report["origin_parity"], [0, 0])
+        self.assertGreater(report["changed_values"], 0)
+        again, _ = apply_bayer(dots, np.random.default_rng(0), sample(), (0, 0, 64, 40), self.options, "train")
+        np.testing.assert_array_equal(a, again)
+
+    def test_noise_attenuation_matches_the_bilinear_kernels_whatever_the_noise_order(self):
+        # 每个传感器像素独立加噪声，和先在 RGB 三个通道里独立加噪声再取样，在数学上等价；去马赛克后的噪声标准差
+        # 是原来的 0.75（红、蓝）和 0.79（绿）倍，等于双线性核的理论值。这里固定这个事实，免得有人再把噪声搬进马赛克。
+        rng = np.random.default_rng(0)
+        h, w = 240, 280
+        core = (slice(8, -8), slice(8, -8))
+        in_mosaic = bayer_demosaic(rng.standard_normal((h, w)))[core].reshape(-1, 3).std(0)
+        rgb_first = bayer_demosaic(bayer_mosaic(rng.standard_normal((h, w, 3))))[core].reshape(-1, 3).std(0)
+        expected = np.sqrt([(1 + .5 + .5 + .25) / 4, (1 + .25) / 2, (1 + .5 + .5 + .25) / 4])  # R、G、B
+        np.testing.assert_allclose(in_mosaic, expected, atol=0.02)
+        np.testing.assert_allclose(rgb_first, expected, atol=0.02)
+        # 去马赛克后相邻像素的噪声相关（空间相关的彩色噪声），不再是独立噪声
+        noise = bayer_demosaic(rng.standard_normal((h, w)))[core][..., 0]
+        noise = noise - noise.mean()
+        self.assertGreater(float((noise[:, :-1] * noise[:, 1:]).mean() / (noise ** 2).mean()), 0.2)
+
+    def test_geometry_is_not_moved(self):
+        image = np.zeros((41, 41, 3), np.uint8); image[18:23, 18:23] = 200
+        out, _ = apply_bayer(image, np.random.default_rng(0), sample(), (0, 0, 41, 41), self.options, "train")
+        yy, xx = np.mgrid[:41, :41]
+        for c in range(3):
+            weight = out[..., c].astype(float)
+            self.assertAlmostEqual((weight * xx).sum() / weight.sum(), 20, delta=0.05)
+            self.assertAlmostEqual((weight * yy).sum() / weight.sum(), 20, delta=0.05)
+
+    def test_off_real_and_validation_paths_are_exact_noops(self):
+        image = np.full((32, 40, 3), 77, np.uint8); s = sample()
+        for source, split, prob in (("real", "train", 1), ("sim", "val", 1), ("sim", "train", 0)):
+            s.source = source; self.options["prob"] = prob
+            rng = np.random.default_rng(2); state = copy.deepcopy(rng.bit_generator.state)
+            out, meta = apply_bayer(image, rng, s, (0, 0, 40, 32), self.options, split)
+            np.testing.assert_array_equal(out, image); self.assertIsNone(meta)
+            self.assertEqual(state, rng.bit_generator.state)
+
+
 class ConfigTest(unittest.TestCase):
     def test_invalid_augmentation_settings_fail_early(self):
         for override in ({"effects": {"motion_blur": {"kernel": "wrong"}}},
@@ -224,7 +405,15 @@ class ConfigTest(unittest.TestCase):
                          {"roi": {"tracker": {"lost_time_ms": 0}}},
                          {"effects": {"moire": {"pixel_aperture": [0, 1]}}},
                          {"effects": {"moire": {"strength": [0, 2]}}},
-                         {"effects": {"moire": {"harmonics": 100}}}):
+                         {"effects": {"moire": {"harmonics": 100}}},
+                         {"effects": {"bayer": {"pattern": "bggr"}}},
+                         {"effects": {"bayer": {"demosaic": "ahd"}}},
+                         {"effects": {"bayer": {"prob": 2}}},
+                         {"effects": {"flicker": {"duty": [0, 1]}}},
+                         {"effects": {"flicker": {"refresh_hz": [5, 50]}}},
+                         {"effects": {"flicker": {"scan_span": [0, 2]}}},
+                         {"effects": {"flicker": {"scan_direction": "left"}}},
+                         {"effects": {"flicker": {"rows": 1}}}):
             with self.assertRaises(ValueError):
                 configuration(override)
 

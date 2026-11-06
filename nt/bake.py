@@ -43,10 +43,10 @@ from nt.canonical import Sample, read_manifest, read_samples, sample_to_dict, sa
 from nt.convert import pose_line
 from nt.geometry import bbox
 from nt.spec import LabelSpec
-from nt.bake_augment import apply_moire, centered_motion_kernel, tracker_roi, validate_config
+from nt.bake_augment import apply_bayer, apply_flicker, apply_moire, centered_motion_kernel, tracker_roi, validate_config
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "bake" / "default.yaml"
-BAKE_VERSION = "3"  # 3：修正模糊核，增加可选的预测 ROI 和点阵采样增强。
+BAKE_VERSION = "4"  # 4：增加可选的拜耳取样（伪色）和全局快门频闪；3：修正模糊核，增加预测 ROI 和点阵采样增强。
 
 BGR = {"red": (40, 40, 255), "blue": (255, 90, 20), "white": (255, 255, 255), "green": (60, 255, 60), "amber": (0, 190, 255)}
 
@@ -351,10 +351,17 @@ def prepare_view(task: dict, spec: LabelSpec, cfg: dict) -> dict:
     ref_px = float(np.median([b[2] - b[0] for b in boxes])) if boxes else 0.03 * img_w
     local_boxes = [(b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0) for b in boxes]
     clutter = draw_distractors(crop, rng, cfg, local_boxes, ref_px)
+    # 物理顺序：屏幕自身的频闪和点阵采样 → 曝光、模糊、噪声 → 传感器输出的 8 位拜耳数据经去马赛克。
+    crop, flicker_meta = apply_flicker(crop, extra_rng("flicker_v1"), sample, trained, roi, cfg["effects"].get("flicker", {}), split)
     crop, moire_meta = apply_moire(crop, extra_rng("moire_v1"), sample, trained, roi, cfg["effects"].get("moire", {}), split)
     crop, used = apply_effects(crop, rng, cfg)
+    crop, bayer_meta = apply_bayer(crop, extra_rng("bayer_v1"), sample, roi, cfg["effects"].get("bayer", {}), split)
+    if flicker_meta is not None:
+        used["flicker"] = flicker_meta
     if moire_meta is not None:
         used["moire"] = moire_meta
+    if bayer_meta is not None:
+        used["bayer"] = bayer_meta
     if lens is not None:
         used["lens"] = lens
     return {"sample": sample, "source_image": img, "trained": trained, "boxes": boxes,
@@ -491,6 +498,8 @@ def bake(sources: list[tuple[Path, int]], out: Path, spec: LabelSpec, cfg: dict,
         "images_with_distractors": sum(1 for m in metas if m["distractors"]),
         "tracker_roi_states": dict(Counter(m["roi_augmentation"]["state"] for m in metas if "roi_augmentation" in m)),
         "images_with_moire": sum(any(a["changed_values"] > 0 for a in m["effects"].get("moire", {}).get("applied", [])) for m in metas),
+        "images_with_flicker": sum(any(a["changed_values"] > 0 for a in m["effects"].get("flicker", {}).get("applied", [])) for m in metas),
+        "images_with_bayer": sum(1 for m in metas if m["effects"].get("bayer", {}).get("changed_values", 0) > 0),
         "armors_dropped_by_roi": sum(m["dropped_by_roi"] for m in metas),
         "armors_skipped_untrained_colors": sum(m["skipped_untrained_colors"] for m in metas),
         "meta_sha256": hashlib.sha256((tmp / "meta.jsonl").read_bytes()).hexdigest(),

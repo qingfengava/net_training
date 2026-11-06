@@ -1,0 +1,5 @@
+# 仅验证全局快门频闪。刷新频率、占空比、扫描方式都是占位范围，官方模块出来后用实测值替换（见 docs/bake_augment_v3.md）。
+base: default.yaml
+effects:
+  flicker:
+    prob: 0.35
