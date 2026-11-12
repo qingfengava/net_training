@@ -1,0 +1,19 @@
+# 平坦隧道接近序列，程序化隧道（尺寸随机、材质随机）。用法见 tunnel_seq_smoke.toml。
+out_dir = "/tmp/rm27/seq_dims"
+seed = 11
+samples = 1
+settle_frames = 3
+timeout_frames = 600
+
+[tunnel]
+runs = 12
+fps = 30.0
+speed_mps = [1.5, 2.5]
+start_dist_m = 4.5
+dim_sigma_m = 0.02
+dim_clip_m = 0.05
+random_materials = true
+
+[light]
+illuminance = [300.0, 1200.0]
+elevation_deg = [35.0, 80.0]

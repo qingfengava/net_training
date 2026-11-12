@@ -1,0 +1,29 @@
+{
+  "class_counts": {},
+  "corner_definition": "pending_official_style",
+  "counts": {
+    "accepted_samples": 60,
+    "armors": 0,
+    "input_samples": 60,
+    "negative_frames": 60,
+    "rejected_samples": 0
+  },
+  "created_utc": "2026-11-06T07:59:45Z",
+  "image_formats": {
+    ".png": 60
+  },
+  "images_sha256": "5d0330429c457ecde00a2a019edac0ec620607045cdf49ec3f1800143dcdd91a",
+  "importer": "canonical-jsonl@1",
+  "issues": {},
+  "label_spec_sha256": "625f6b06eec0396ba78e18980adec2564161691458e492d289091de656c5938b",
+  "labels_sha256": "9504f728552b33f25869329dc938a986dfda4e65d1f3057bb8842400692b2579",
+  "name": "field_negative_v1_val",
+  "notes": [
+    "canonical-jsonl: labels come straight from the simulator, which also records scene parameters"
+  ],
+  "pixel_convention": "edge",
+  "rejected": {},
+  "role": "val",
+  "source": "sim",
+  "src_path": "/home/robo/net_training/runs/sim_field_negative_v1_val"
+}

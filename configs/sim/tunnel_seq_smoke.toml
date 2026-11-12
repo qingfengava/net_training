@@ -1,0 +1,18 @@
+# 平坦隧道 A 接近序列（CAD 隧道），给 sleepy 的 tunnel_replay 用。
+# 运行：BEVY_ASSET_ROOT=/home/robo/bevy_robomaster_simulator DAEDALUS_DATASET=<本文件> DAEDALUS_HEADLESS=1 \
+#       DAEDALUS_MAX_FPS=0 DAEDALUS_DISABLE_TALOS=1 cargo run --release --features talos
+out_dir = "/tmp/rm27/seq_smoke"
+seed = 7
+samples = 1
+settle_frames = 3
+timeout_frames = 600
+
+[tunnel]
+runs = 4
+fps = 30.0
+speed_mps = [2.0, 2.0]
+start_dist_m = 4.0
+
+[light]
+illuminance = [600.0, 600.0]
+elevation_deg = [60.0, 60.0]

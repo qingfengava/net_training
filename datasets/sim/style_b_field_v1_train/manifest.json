@@ -1,0 +1,54 @@
+{
+  "class_counts": {
+    "blue_base": 485,
+    "blue_four": 1019,
+    "blue_one": 1002,
+    "blue_outpost": 574,
+    "blue_sentry": 933,
+    "blue_three": 968,
+    "gray_base": 40,
+    "gray_four": 177,
+    "gray_one": 204,
+    "gray_outpost": 54,
+    "gray_sentry": 158,
+    "gray_three": 188,
+    "red_base": 464,
+    "red_four": 964,
+    "red_one": 910,
+    "red_outpost": 817,
+    "red_sentry": 965,
+    "red_three": 1006
+  },
+  "corner_definition": "pending_official_style",
+  "counts": {
+    "accepted_samples": 2608,
+    "armors": 10928,
+    "input_samples": 2700,
+    "negative_frames": 18,
+    "rejected_samples": 92
+  },
+  "created_utc": "2026-11-06T07:56:07Z",
+  "image_formats": {
+    ".png": 2608
+  },
+  "images_sha256": "f6eee2bb85f45a9c6cb5b38aeaf3e0138fdec34adbbb223fc15af05cf2a56c34",
+  "importer": "canonical-jsonl@1",
+  "issues": {
+    "W_NEAR_DUPLICATE_FRAME": 17,
+    "W_QUAD_ROLL": 278,
+    "W_SMALL_ARMOR": 87
+  },
+  "label_spec_sha256": "625f6b06eec0396ba78e18980adec2564161691458e492d289091de656c5938b",
+  "labels_sha256": "252f6d33c0c57dce1140120756dfc799a222fc79d89ccf89dd60f3d72fd168fd",
+  "name": "style_b_field_v1_train",
+  "notes": [
+    "canonical-jsonl: labels come straight from the simulator, which also records scene parameters"
+  ],
+  "pixel_convention": "edge",
+  "rejected": {
+    "E_QUAD_ORDER": 96
+  },
+  "role": "train",
+  "source": "sim",
+  "src_path": "/home/robo/net_training/runs/sim_style_b_field_v1_train"
+}

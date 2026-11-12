@@ -1,0 +1,44 @@
+# 隧道测距闭环·手动驾驶：键盘开车接近平坦隧道 A，sleepy 测距，窗口 HUD 实时显示测距误差。
+# 终端 1（仿真，窗口模式，不要设 DAEDALUS_HEADLESS；输出目录必须是新的）：
+#   cd /home/robo/bevy_robomaster_simulator
+#   S=/home/robo/net_training/runs/tunnel_manual/$(date +%m%d_%H%M)
+#   BEVY_ASSET_ROOT=$PWD DAEDALUS_TUNNEL_LOOP=/home/robo/net_training/configs/sim/tunnel_manual.toml \
+#     DAEDALUS_TUNNEL_OUT=${S}_sim DAEDALUS_MAX_FPS=60 cargo run --release --features talos
+# 终端 2（sleepy，用同一个 S；show=1 另开一个窗口看检测和滤波）：
+#   /home/robo/sleepy/bin/tunnel_sim_loop ${S}_sleepy show=1 max_s=7200
+# 按键：W/S 加减速（减到 0 后倒车）、A/D 转向、左 Shift 提速、R 重来、1–4 换隧道实例。
+# 评估：python3 /home/robo/sleepy/tools/tunnel/eval_sim_loop.py ${S}_sim ${S}_sleepy --per-run
+seed = 7001
+settle_s = 0.5
+gap_s = 1.5
+search_pitch_deg = 4.0
+gimbal_tau_s = 0.05
+gimbal_max_rate_deg_s = 300.0
+wait_client_s = 600.0
+
+[manual]
+max_speed_mps = 2.0
+boost_speed_mps = 3.0
+reverse_speed_mps = 1.0
+accel_mps2 = 2.5
+brake_mps2 = 5.0
+coast_mps2 = 1.0
+yaw_rate_deg_s = 45.0
+
+# 手动模式只用到起始距离、结束距离、高度、姿态噪声和隧道变体；车速、航向由键盘给出
+[tunnel]
+runs = 100000
+start_dist_m = 4.6
+end_ref_dist_m = 0.2
+pivot_height_m = [0.30, 0.45]
+gimbal_track_noise_deg = 0.3
+pitch_noise_deg = 0.3
+roll_noise_deg = 0.3
+noise_tau_s = 0.25
+dim_sigma_m = 0.02
+dim_clip_m = 0.05
+random_materials = true
+
+[light]
+illuminance = [200.0, 1500.0]
+elevation_deg = [25.0, 85.0]

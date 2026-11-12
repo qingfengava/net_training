@@ -1,0 +1,14 @@
+# 隧道关键点检测器的训练超参（其余沿用 pose_default.yaml）。
+base: pose_default.yaml
+
+imgsz: 960            # 4:3 输入，rect=True 时每批为 (B, 3, 720, 960)；边缘定位靠原图精修，这里只要给出像素级的初值
+epochs: 60
+batch: 16
+lr0: 0.002            # 0.002 * 5 / (4 + nc)，nc = 1
+
+# 隧道正面左右对称（data.yaml 的 flip_idx 把 K1<->K8 等成对交换），所以可以水平翻转。
+fliplr: 0.5
+scale: 0.30
+translate: 0.10
+hsv_s: 0.4
+hsv_v: 0.35

@@ -1,0 +1,35 @@
+# B6b 隧道闭环仿真（验收，50 次接近）。先启动仿真，再启动 sleepy 的 tunnel_sim_loop：
+#   BEVY_ASSET_ROOT=/home/robo/bevy_robomaster_simulator DAEDALUS_TUNNEL_LOOP=<本文件> DAEDALUS_HEADLESS=1 \
+#     DAEDALUS_MAX_FPS=60 cargo run --release --features talos
+#   /home/robo/sleepy/bin/tunnel_sim_loop <sleepy 输出目录>
+# 评估：python3 /home/robo/sleepy/tools/tunnel/eval_sim_loop.py <out_dir> <sleepy 输出目录>
+out_dir = "/home/robo/net_training/runs/tunnel_b6/loop50_sim"
+seed = 5101
+settle_s = 0.5
+gap_s = 1.5
+search_pitch_deg = 4.0
+gimbal_tau_s = 0.05
+gimbal_max_rate_deg_s = 300.0
+
+[tunnel]
+runs = 50
+fps = 60.0
+speed_mps = [1.0, 3.0]
+yaw_sigma_deg = 3.0
+lateral_m = 0.20
+entry_lateral_m = 0.08
+entry_ref_dist_m = 1.2
+start_dist_m = 4.6
+end_ref_dist_m = 0.2
+pivot_height_m = [0.25, 0.55]
+gimbal_track_noise_deg = 0.3
+pitch_noise_deg = 0.3
+roll_noise_deg = 0.3
+noise_tau_s = 0.25
+dim_sigma_m = 0.02
+dim_clip_m = 0.05
+random_materials = true
+
+[light]
+illuminance = [200.0, 1500.0]
+elevation_deg = [25.0, 85.0]

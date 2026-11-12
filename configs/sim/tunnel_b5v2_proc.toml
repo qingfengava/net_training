@@ -1,0 +1,30 @@
+# B5 v2 接近序列（程序化隧道，尺寸 ±2 cm）。与 det_val_* 的区别：30 fps；云台姿态噪声是相关时间 0.25 s 的
+# Gauss–Markov 过程（不再是每帧独立的白噪声），所以可以用 tunnel_replay 的 dt_ms 测时间偏移。
+# 渲染：scripts/run_tunnel_det_dataset.sh b5v2_proc b5v2_stress b5v2_neg
+# 转换：sleepy/tools/tunnel/daedalus_to_seq.py <out_dir> -o <序列目录>
+out_dir = "/home/robo/net_training/runs/tunnel_b5v2/proc"
+seed = 3001
+samples = 1
+settle_frames = 3
+timeout_frames = 600
+
+[tunnel]
+runs = 16
+fps = 30.0
+speed_mps = [1.0, 3.0]
+yaw_sigma_deg = 6.0
+lateral_m = 0.20
+start_dist_m = 4.6
+end_ref_dist_m = 0.2
+pivot_height_m = [0.25, 0.55]
+gimbal_track_noise_deg = 1.0
+pitch_noise_deg = 1.0
+roll_noise_deg = 0.5
+noise_tau_s = 0.25
+dim_sigma_m = 0.02
+dim_clip_m = 0.05
+random_materials = true
+
+[light]
+illuminance = [200.0, 1500.0]
+elevation_deg = [25.0, 85.0]

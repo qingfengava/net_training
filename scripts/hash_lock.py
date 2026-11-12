@@ -6,10 +6,10 @@
 For every name==version line it collects the sha256 of every file of that exact version from PyPI (JSON API)
 and, for the packages PyTorch's cu128 index also serves (torch, torchvision, triton, the nvidia-* CUDA wheels),
 from that index too, because its copies are not always byte-identical to PyPI's. Listing every file keeps the
-lock usable on other platforms and Python versions; pip accepts any listed hash and refuses a file that matches
-none. Standard library only, so it runs before or outside the venv. Needs network access to both indexes.
+lock usable on other platforms and Python versions; uv (and pip) accept any listed hash and refuse a file that
+matches none. Standard library only, so it runs before or outside the venv. Needs network access to both indexes.
 
-Install from it with scripts/setup_env.sh (pip --require-hashes --no-deps).
+Install from it with scripts/setup_env.sh (uv pip install --require-hashes --no-deps).
 """
 from __future__ import annotations
 

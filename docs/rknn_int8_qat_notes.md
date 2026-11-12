@@ -154,12 +154,12 @@ TensorRT INT8 的实测在第 9.2 节（PTQ 基线和 QAT 流程检查）。下�
 
 ## 7. 复现
 
-在 `~/rm_micro_uav_swarm` 下，用 conda 环境 rknn（rknn-toolkit2 2.3.2）：
+在 `~/rm_micro_uav_swarm` 下，用 uv 环境 `~/.envs/rknn`（rknn-toolkit2 2.3.2）：
 
 `baked/simm7_c2` 已于 2026-11-01 删除以腾磁盘。复现前先在 net_training 里重新烘焙（约 3 分钟，像素和原来相同）：`scripts/run_capped.sh 6 -- python -m nt.bake --src datasets/sim/simm7 --out baked/simm7_c2 --copies 2 --seed 0 --workers 6`。生成后可以用 `runs/baked_manifests/simm7_c2.meta.sha256` 核对。
 
 ```bash
-py=~/miniforge3/envs/rknn/bin/python
+py=~/.envs/rknn/bin/python
 # YOLO26n INT8 PTQ（约 2.5 分钟，峰值内存 1.9 GB）
 ~/net_training/scripts/run_capped.sh 5 -- $py -I tools/rknn_check_y26.py \
   --onnx ~/net_training/exports/y26n_simm7_e100/model.onnx --images ~/net_training/baked/simm7_c2/images/val --conf 0.2
